@@ -61,7 +61,13 @@ function createWindow() {
     },
   });
 
-  win.loadURL(UI_URL);
+  // Packaged app: load the BUNDLED UI (its own interface, no tunnel needed).
+  // Dev: load the local dev server.
+  if (app.isPackaged && fs.existsSync(path.join(__dirname, 'app-ui', 'index.html'))) {
+    win.loadFile(path.join(__dirname, 'app-ui', 'index.html'));
+  } else {
+    win.loadURL(UI_URL);
+  }
 
   // Open external links in the default browser, not inside the app
   win.webContents.setWindowOpenHandler(({ url }) => {

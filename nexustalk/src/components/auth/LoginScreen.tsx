@@ -8,9 +8,12 @@ import {
   Video,
   Mail,
   Lock,
-  Loader2
+  Loader2,
+  Server,
+  Check
 } from 'lucide-react';
-import { api, apiUrl } from '../../lib/api';
+import { api, apiUrl, getServerBase, setServerBase } from '../../lib/api';
+import { resetSocket } from '../../lib/realtime';
 
 interface LoginScreenProps {
   onLoginSuccess: (token: string) => void;
@@ -23,6 +26,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [googleEnabled, setGoogleEnabled] = useState(false);
+  const [serverVal, setServerVal] = useState(getServerBase());
+  const [serverSaved, setServerSaved] = useState(false);
 
   const urlError = new URLSearchParams(window.location.search).get('authError');
 
@@ -31,6 +36,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       .then((r) => setGoogleEnabled(r.enabled))
       .catch(() => setGoogleEnabled(false));
   }, []);
+
+  const saveServer = (value: string) => {
+    setServerVal(value);
+    setServerBase(value);
+    resetSocket(); // reconnect to the (possibly new) server
+    setServerSaved(true);
+    setTimeout(() => setServerSaved(false), 1800);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -189,6 +202,34 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
             </p>
           </motion.div>
         </AnimatePresence>
+
+        {/* Server address — the app has its own UI; point it at your NexusTalk server */}
+        <div className="mt-6 pt-4 border-t border-white/5">
+          <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">
+            <Server className="w-3 h-3" />
+            Server address
+            {serverSaved && (
+              <span className="text-emerald-400 normal-case flex items-center gap-0.5">
+                <Check className="w-3 h-3" /> saved
+              </span>
+            )}
+          </label>
+          <input
+            type="url"
+            defaultValue={serverVal}
+            onBlur={(e) => {
+              if (e.target.value !== getServerBase()) saveServer(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+            }}
+            placeholder="https://your-server.com (apnar server er link)"
+            className="w-full px-3 py-2 rounded-xl bg-white/[0.04] border border-white/10 text-[11px] text-slate-300 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500/50"
+          />
+          <p className="text-[10px] text-slate-600 mt-1 leading-relaxed">
+            App er nijer UI built-in — sudhu server link ekbar dile thakbe. Change korle Enter chapun.
+          </p>
+        </div>
       </motion.div>
 
       {/* Footer highlights */}

@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -15,7 +19,22 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install dependencies
+      # Build the web UI and bundle it INTO the app (its own interface)
+      - name: Build bundled web UI
+        working-directory: nexustalk
+        run: |
+          npm install
+          npx vite build --base=./
+        env:
+          # Optional pre-filled server address (repo variable APP_URL)
+          VITE_DEFAULT_SERVER: ${{ vars.APP_URL }}
+
+      - name: Copy UI into desktop app
+        run: |
+          rm -rf desktop/app-ui
+          cp -r nexustalk/dist desktop/app-ui
+
+      - name: Install desktop deps
         working-directory: desktop
         run: npm install
 

@@ -14,7 +14,7 @@
   "build": {
     "appId": "app.nexustalk.desktop",
     "productName": "NexusTalk",
-    "files": ["main.js", "preload.js", "icon.png"],
+    "files": ["main.js", "preload.js", "icon.png", "app-ui/**/*"],
     "win": {
       "target": "nsis"
     },
