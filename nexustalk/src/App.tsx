@@ -597,7 +597,42 @@ export default function App() {
           onHangUp={() => getCallManager().hangUp()}
           onToggleMute={() => setMuted(getCallManager().toggleMute())}
           onToggleCamera={() => setCamOff(getCallManager().toggleCamera())}
-          onToggleShare={handleToggleShare}
+          onToggleShare={() => {
+            getCallManager()
+              .toggleScreenShare()
+              .then(setSharing)
+              .catch((err) => {
+                setCallToast(err.message ?? 'Screen share failed');
+                setTimeout(() => setCallToast(null), 2600);
+              });
+          }}
+          onShareError={(message) => {
+            setCallToast(message);
+            setTimeout(() => setCallToast(null), 3000);
+          }}
+          onGrantControl={(peerIds) => {
+            (async () => {
+              if (!sharing) {
+                await getCallManager()
+                  .toggleScreenShare()
+                  .then((s) => setSharing(s))
+                  .catch((err) => {
+                    setCallToast(err.message ?? 'Screen share failed');
+                    setTimeout(() => setCallToast(null), 3000);
+                    return;
+                  });
+              }
+              await getCallManager().grantControl(peerIds);
+              setCallToast('Remote control ON — apnar PC control korche');
+              setTimeout(() => setCallToast(null), 3000);
+            })();
+          }}
+          onDisableControl={() => {
+            getCallManager().disableControl();
+            setCallToast('Remote control off');
+            setTimeout(() => setCallToast(null), 2000);
+          }}
+          onControlInput={(obj) => getCallManager().sendControlInput(obj)}
         />
       )}
 

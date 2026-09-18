@@ -12,6 +12,7 @@ import json
 import time
 import socketio
 import requests
+import websockets
 
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
 from aiortc.mediastreams import MediaStreamTrack, AudioStreamTrack
@@ -311,6 +312,29 @@ async def on_remote_end(data):
     await end_session()
 
 
+# ---------------------------------------------------------------- local input server
+# The host's browser (during a "remote control" call session) forwards input
+# events to this localhost server — the agent injects them into the OS.
+
+async def input_ws_handler(ws):
+    print("input client connected (host browser)")
+    try:
+        async for message in ws:
+            try:
+                handle_input(json.loads(message))
+            except Exception as e:
+                print("bad input:", e)
+    except Exception:
+        pass
+    print("input client disconnected")
+
+
+async def start_input_server():
+    async with websockets.serve(input_ws_handler, "127.0.0.1", 9991):
+        print("input server: ws://127.0.0.1:9991 ready")
+        await asyncio.Future()  # run forever
+
+
 # ---------------------------------------------------------------- main
 
 async def main():
@@ -319,13 +343,16 @@ async def main():
     u = me.get("user", {})
     print(f"agent account: {u.get('name')} (@{u.get('username')})")
 
-    await sio.connect(
-        SERVER,
-        auth={"token": TOKEN},
-        transports=["websocket"],
-        socketio_path="socket.io",
+    await asyncio.gather(
+        start_input_server(),
+        sio.connect(
+            SERVER,
+            auth={"token": TOKEN},
+            transports=["websocket"],
+            socketio_path="socket.io",
+        ),
+        sio.wait(),
     )
-    await sio.wait()
 
 
 if __name__ == "__main__":
