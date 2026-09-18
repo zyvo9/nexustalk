@@ -218,9 +218,13 @@ class CallManager {
       return false;
     }
 
-    const screen = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    const screen = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { ideal: 30, max: 60 } },
+    });
     this.screenStream = screen;
     const screenTrack = screen.getVideoTracks()[0];
+    // Prefer smooth motion for the remote-control viewing experience
+    (screenTrack as any).contentHint = 'motion';
     const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
     if (!sender) throw new Error('no video sender');
     await sender.replaceTrack(screenTrack);
@@ -314,6 +318,11 @@ class CallManager {
       }
 
       case 'call:control': {
+        // Host: the controller pressed "Stop" — revoke their access
+        if (data.on === false && this.controlEnabled) {
+          this.disableControl();
+          return;
+        }
         // Controller side: host granted (or revoked) control to me
         this.setState({ ...this.state, remoteControl: !!data.on });
         break;
@@ -356,6 +365,12 @@ class CallManager {
     this.agentWs?.close();
     this.agentWs = null;
     this.setState({ ...this.state, controlGrantedTo: [] });
+  }
+
+  /** Controller: give up control (Stop button in the session view). */
+  releaseControl() {
+    if (this.peer) this.socket.emit('call:control', { to: this.peer.id, on: false });
+    this.setState({ ...this.state, remoteControl: false });
   }
 
   /** Controller: send an input event to the host (relayed to its agent). */

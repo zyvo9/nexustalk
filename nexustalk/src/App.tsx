@@ -639,6 +639,11 @@ export default function App() {
             setCallToast('Remote control off');
             setTimeout(() => setCallToast(null), 2000);
           }}
+          onStopControlling={() => {
+            getCallManager().releaseControl();
+            setCallToast('Control released');
+            setTimeout(() => setCallToast(null), 2000);
+          }}
           onControlInput={(obj) => getCallManager().sendControlInput(obj)}
         />
       )}

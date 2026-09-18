@@ -142,6 +142,7 @@ class MssTrack(MediaStreamTrack):
 def create_screen_track():
     if HAS_DXCAM:
         try:
+            import cv2  # dxcam needs cv2 inside its capture thread — check up front
             track = DxcamTrack()
             print(f"capture: dxcam (GPU) @ {TARGET_FPS}fps")
             return track
@@ -171,8 +172,16 @@ def set_mouse(x: float, y: float):
     mouse.position = (int(x * SCREEN_W), int(y * SCREEN_H))
 
 
+INPUT_COUNT = {"n": 0}
+
+
 def handle_input(msg: dict):
     t = msg.get("t")
+    INPUT_COUNT["n"] += 1
+    if t in ("mc", "md", "mu", "sc", "kd", "ku"):
+        print(f"INPUT #{INPUT_COUNT['n']}: {t} {msg}")
+    elif INPUT_COUNT["n"] % 30 == 0:
+        print(f"INPUT x{INPUT_COUNT['n']} (mouse moves flowing)")
     try:
         if t == "mm":
             set_mouse(msg["x"], msg["y"])

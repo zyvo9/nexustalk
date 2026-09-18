@@ -16,7 +16,9 @@ import {
   MousePointerClick,
   Eye,
   UserCheck,
-  AlertTriangle
+  AlertTriangle,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 import { Avatar } from '../common/Avatar';
 import type { CallState, CallType } from '../../lib/webrtc';
@@ -39,6 +41,7 @@ interface CallOverlayProps {
   onShareError: (message: string) => void;
   onGrantControl: (peerIds: string[]) => void;
   onDisableControl: () => void;
+  onStopControlling: () => void;
   onControlInput: (obj: Record<string, unknown>) => void;
 }
 
@@ -76,11 +79,13 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
   onShareError,
   onGrantControl,
   onDisableControl,
+  onStopControlling,
   onControlInput,
 }) => {
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const sessionWrapRef = useRef<HTMLDivElement>(null);
   const [seconds, setSeconds] = useState(0);
   const [speakerMuted, setSpeakerMuted] = useState(false);
   const [needsTap, setNeedsTap] = useState(false);
@@ -89,6 +94,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
   const [chooser, setChooser] = useState<'none' | 'open'>('none');
   const [pickMode, setPickMode] = useState(false);
   const [controlTargets, setControlTargets] = useState<string[]>([]);
+  const [isFs, setIsFs] = useState(false);
 
   // Remote audio playback (critical for voice calls — no <video> element there)
   useEffect(() => {
@@ -218,78 +224,113 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
 
   const controllerActive = state.phase === 'active' && !!state.remoteControl;
 
+  // ---- CRD-accurate coordinate mapping ----
+  // The video is letterboxed (object-contain in session view): convert the
+  // pointer position relative to the ACTUAL displayed video content, not the element.
+  const contentPos = (clientX: number, clientY: number) => {
+    const v = remoteVideoRef.current;
+    if (!v) return null;
+    const rect = v.getBoundingClientRect();
+    const vw = v.videoWidth || rect.width;
+    const vh = v.videoHeight || rect.height;
+    const scale = controllerActive
+      ? Math.min(rect.width / vw, rect.height / vh)   // contain (session view)
+      : Math.max(rect.width / vw, rect.height / vh);  // cover (normal call)
+    const cw = vw * scale;
+    const ch = vh * scale;
+    const ox = rect.left + (rect.width - cw) / 2;
+    const oy = rect.top + (rect.height - ch) / 2;
+    return {
+      x: Math.min(1, Math.max(0, (clientX - ox) / cw)),
+      y: Math.min(1, Math.max(0, (clientY - oy) / ch)),
+    };
+  };
+
   const lastMove = useRef(0);
   const onMouseMove = (e: React.MouseEvent) => {
     if (!controllerActive) return;
     const now = Date.now();
-    if (now - lastMove.current < 40) return;
+    if (now - lastMove.current < 12) return; // ~60Hz for smooth control
     lastMove.current = now;
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    onControlInput({ t: 'mm', x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height });
+    const p = contentPos(e.clientX, e.clientY);
+    if (p) onControlInput({ t: 'mm', ...p });
   };
   const onMouseDown = (e: React.MouseEvent) => {
     if (!controllerActive) return;
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    onControlInput({ t: 'md', x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height, btn: e.button === 2 ? 'right' : 'left' });
+    const p = contentPos(e.clientX, e.clientY);
+    if (p) onControlInput({ t: 'md', ...p, btn: e.button === 2 ? 'right' : 'left' });
   };
   const onMouseUp = (e: React.MouseEvent) => {
     if (!controllerActive) return;
     onControlInput({ t: 'mu', btn: e.button === 2 ? 'right' : 'left' });
   };
-  const onWheelEvt = (e: React.WheelEvent) => {
-    if (!controllerActive) return;
-    e.preventDefault();
-    onControlInput({ t: 'sc', dy: -Math.sign(e.deltaY) * 3 });
-  };
+  // Native non-passive wheel listener (React wheel is passive — preventDefault needs this)
+  useEffect(() => {
+    const el = sessionWrapRef.current;
+    if (!el || !controllerActive) return;
+    const h = (ev: WheelEvent) => {
+      ev.preventDefault();
+      onControlInput({ t: 'sc', dy: Math.max(-5, Math.min(5, Math.round(-ev.deltaY / 100))) });
+    };
+    el.addEventListener('wheel', h, { passive: false });
+    return () => el.removeEventListener('wheel', h);
+  }, [controllerActive]);
   const mapKey = (e: React.KeyboardEvent) =>
     e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase().replace('arrow', '').replace('escape', 'esc');
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (!controllerActive) return;
+    if (e.key === 'Escape' && document.fullscreenElement) return; // ESC exits fullscreen natively
     e.preventDefault();
     onControlInput({ t: 'kd', key: mapKey(e) });
   };
   const onKeyUp = (e: React.KeyboardEvent) => {
     if (!controllerActive) return;
+    e.preventDefault();
     onControlInput({ t: 'ku', key: mapKey(e) });
   };
 
+  // Session view: focus so keyboard goes to the remote PC, and hide the local cursor
+  useEffect(() => {
+    if (controllerActive) sessionWrapRef.current?.focus();
+  }, [controllerActive]);
+
+  const toggleFullscreen = () => {
+    const el = sessionWrapRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => undefined);
+    else el.requestFullscreen?.().catch(() => undefined);
+  };
+  useEffect(() => {
+    const h = () => setIsFs(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', h);
+    return () => document.removeEventListener('fullscreenchange', h);
+  }, []);
+
   // ---- Touch support (phone controller): tap = click, drag = move ----
   const touchPos = (e: React.TouchEvent) => {
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const t = e.touches[0] ?? e.changedTouches[0];
-    return {
-      x: Math.min(1, Math.max(0, (t.clientX - rect.left) / rect.width)),
-      y: Math.min(1, Math.max(0, (t.clientY - rect.top) / rect.height)),
-    };
+    return contentPos(t.clientX, t.clientY) ?? { x: 0, y: 0 };
   };
 
   const onTouchStart = (e: React.TouchEvent) => {
     if (!controllerActive) return;
     e.preventDefault();
-    sendControlTouch(e, 'md');
+    onControlInput({ t: 'md', ...touchPos(e), btn: 'left' });
   };
 
   const onTouchMove = (e: React.TouchEvent) => {
     if (!controllerActive) return;
     e.preventDefault();
     const now = Date.now();
-    if (now - lastMove.current < 40) return;
+    if (now - lastMove.current < 24) return;
     lastMove.current = now;
-    sendControlTouch(e, 'ms');
+    onControlInput({ t: 'ms', ...touchPos(e), btn: 'left' });
   };
 
   const onTouchEnd = (e: React.TouchEvent) => {
     if (!controllerActive) return;
     e.preventDefault();
     onControlInput({ t: 'mu', btn: 'left' });
-  };
-
-  const sendControlTouch = (e: React.TouchEvent, t: string) => {
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const tt = e.touches[0] ?? e.changedTouches[0];
-    const x = Math.min(1, Math.max(0, (tt.clientX - rect.left) / rect.width));
-    const y = Math.min(1, Math.max(0, (tt.clientY - rect.top) / rect.height));
-    onControlInput({ t, x, y, btn: 'left' });
   };
 
   useEffect(() => {
@@ -409,12 +450,14 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
         {/* ================= ACTIVE / ENDED ================= */}
         {(state.phase === 'active' || state.phase === 'ended') && (
           <div
-            className="flex-1 relative overflow-hidden bg-[#0a0f1c] outline-none"
+            ref={sessionWrapRef}
+            className={`flex-1 relative overflow-hidden bg-[#0a0f1c] outline-none ${
+              controllerActive ? 'cursor-none select-none' : ''
+            }`}
             tabIndex={controllerActive ? 0 : -1}
             onMouseMove={onMouseMove}
             onMouseDown={onMouseDown}
             onMouseUp={onMouseUp}
-            onWheel={onWheelEvt}
             onKeyDown={onKeyDown}
             onKeyUp={onKeyUp}
             onTouchStart={onTouchStart}
@@ -424,12 +467,14 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
           >
             {isVideo ? (
               <>
-                {/* Remote video fullscreen */}
+                {/* Remote video — full-bleed in a call, letterboxed in a control session */}
                 <video
                   ref={remoteVideoRef}
                   autoPlay
                   playsInline
-                  className="absolute inset-0 w-full h-full object-cover bg-black"
+                  className={`absolute inset-0 w-full h-full bg-black ${
+                    controllerActive ? 'object-contain cursor-none' : 'object-cover'
+                  }`}
                 />
                 {!remoteStream && (
                   <div className="absolute inset-0 flex items-center justify-center">
@@ -500,8 +545,8 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
               )}
             </div>
 
-            {/* Audio pulse meters (debug: is sound flowing?) */}
-            {(state.phase === 'active') && (
+            {/* Audio pulse meters (debug: is sound flowing?) — hidden in control session */}
+            {(state.phase === 'active' && !controllerActive) && (
               <div className="absolute top-28 inset-x-4 z-30 flex justify-center pointer-events-none">
                 <div className="glass px-4 py-2.5 rounded-2xl space-y-1.5 w-64">
                   <div className="flex items-center gap-2">
@@ -540,12 +585,30 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
               </div>
             )}
 
-            {/* Controller: you have control */}
+            {/* Controller: CRD-style floating session toolbar */}
             {controllerActive && (
-              <div className="absolute top-16 inset-x-4 z-30 flex justify-center pointer-events-none">
-                <div className="bg-emerald-400 text-emerald-950 px-4 py-2 rounded-2xl text-xs font-bold flex items-center gap-2 shadow-xl">
-                  <MousePointerClick className="w-4 h-4" />
-                  You have control — mouse &amp; keyboard are live
+              <div className="absolute top-4 inset-x-0 z-40 flex justify-center pointer-events-none">
+                <div className="pointer-events-auto glass rounded-full pl-4 pr-2 py-2 flex items-center gap-3 shadow-2xl max-w-[92vw]">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                  <span className="text-xs font-semibold text-white truncate">
+                    Controlling {peer?.name?.split(' ')[0]}'s PC
+                  </span>
+                  <span className="font-mono text-[11px] text-emerald-300 shrink-0">{fmtDuration(seconds)}</span>
+                  <span className="w-px h-4 bg-white/15 shrink-0" />
+                  <button
+                    onClick={toggleFullscreen}
+                    title={isFs ? 'Exit fullscreen' : 'Fullscreen'}
+                    className="p-1.5 rounded-full hover:bg-white/10 text-slate-300 cursor-pointer shrink-0"
+                  >
+                    {isFs ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                  </button>
+                  <button
+                    onClick={onStopControlling}
+                    title="Stop controlling"
+                    className="px-3 py-1.5 rounded-full bg-rose-600 hover:bg-rose-500 on-accent text-[11px] font-bold flex items-center gap-1 cursor-pointer shrink-0"
+                  >
+                    <X className="w-3.5 h-3.5" /> Stop
+                  </button>
                 </div>
               </div>
             )}
@@ -665,8 +728,8 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
               </div>
             )}
 
-            {/* Bottom controls */}
-            {state.phase === 'active' && (
+            {/* Bottom controls — hidden while actively controlling (CRD-style clean view) */}
+            {state.phase === 'active' && !controllerActive && (
               <div className="absolute bottom-6 inset-x-0 flex justify-center z-20 pointer-events-none">
                 <div className="pointer-events-auto flex items-center gap-2.5 sm:gap-3.5 p-3 px-4 rounded-full glass shadow-2xl">
                   <CtrlButton
