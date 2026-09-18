@@ -165,6 +165,18 @@ class CallManager {
     return !track.enabled; // true = muted
   }
 
+  /** Mute/unmute the remote audio playback (speaker). */
+  setSpeakerMuted(muted: boolean) {
+    const els: Array<HTMLMediaElement | null> = [];
+    document.querySelectorAll('audio, video').forEach((el) => {
+      // Only mute elements playing the remote stream
+      if ((el as HTMLVideoElement).srcObject || (el as HTMLAudioElement).srcObject) els.push(el as HTMLMediaElement);
+    });
+    els.forEach((el) => {
+      (el as HTMLVideoElement).muted = muted;
+    });
+  }
+
   toggleCamera(): boolean {
     const track = this.localStream?.getVideoTracks()[0];
     if (!track) return false;

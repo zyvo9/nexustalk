@@ -5,6 +5,8 @@ import {
   MicOff,
   Video as VideoIcon,
   VideoOff,
+  Volume2,
+  VolumeX,
   PhoneOff,
   Phone,
   MonitorUp,
@@ -31,6 +33,7 @@ interface CallOverlayProps {
   onReject: () => void;
   onHangUp: () => void;
   onToggleMute: () => void;
+  onToggleSpeaker: () => void;
   onToggleCamera: () => void;
   onToggleShare: () => void;
   onShareError: (message: string) => void;
@@ -45,6 +48,8 @@ function fmtDuration(total: number) {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
+const isVideoCall = (t: CallType) => t === 'video';
+
 export const CallOverlay: React.FC<CallOverlayProps> = ({
   state,
   localStream,
@@ -57,6 +62,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
   onReject,
   onHangUp,
   onToggleMute,
+  onToggleSpeaker,
   onToggleCamera,
   onToggleShare,
   onShareError,
@@ -66,13 +72,46 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
 }) => {
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const [seconds, setSeconds] = useState(0);
+  const [speakerMuted, setSpeakerMuted] = useState(false);
+  const [needsTap, setNeedsTap] = useState(false);
   const [chooser, setChooser] = useState<'none' | 'open'>('none');
   const [pickMode, setPickMode] = useState(false);
   const [controlTargets, setControlTargets] = useState<string[]>([]);
 
+  // Remote audio playback (critical for voice calls — no <video> element there)
+  useEffect(() => {
+    if (remoteAudioRef.current && remoteStream && !isVideoCall(state.type)) {
+      remoteAudioRef.current.srcObject = remoteStream;
+      remoteAudioRef.current.volume = 1;
+      remoteAudioRef.current.play().catch(() => setNeedsTap(true));
+    }
+  }, [remoteStream, state.type]);
+
+  // Video call: make sure the remote <video> is actually PLAYING (autoplay can block)
+  useEffect(() => {
+    if (remoteVideoRef.current && remoteStream && isVideoCall(state.type)) {
+      remoteVideoRef.current.srcObject = remoteStream;
+      remoteVideoRef.current.volume = 1;
+      remoteVideoRef.current.play().catch(() => setNeedsTap(true));
+    }
+  }, [remoteStream, state.type]);
+
+  // Speaker mute applies to whatever is playing the remote audio
+  useEffect(() => {
+    if (remoteAudioRef.current) remoteAudioRef.current.muted = speakerMuted;
+    if (remoteVideoRef.current) remoteVideoRef.current.muted = speakerMuted;
+  }, [speakerMuted, remoteStream]);
+
   const isVideo = state.type === 'video';
   const participants = state.peer ? [state.peer] : [];
+
+  const forcePlay = () => {
+    setNeedsTap(false);
+    remoteVideoRef.current?.play().catch(() => undefined);
+    remoteAudioRef.current?.play().catch(() => undefined);
+  };
 
   const handleShareTap = () => {
     if (sharing || state.controlGrantedTo?.length) {
@@ -299,6 +338,8 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
               /* Voice call layout */
               <div className="absolute inset-0 flex flex-col items-center justify-center relative">
                 <div className="aurora-bg" />
+                {/* Remote audio — THE speaker for voice calls */}
+                <audio ref={remoteAudioRef} autoPlay className="hidden" />
                 <div className="relative z-10 flex flex-col items-center">
                   <div className="relative mb-6">
                     <div className={`absolute inset-0 rounded-full accent-gradient opacity-25 blur-2xl ${state.phase === 'active' ? 'pulse-ring' : ''}`} />
@@ -368,6 +409,19 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
                   <MousePointerClick className="w-4 h-4" />
                   You have control — mouse &amp; keyboard are live
                 </div>
+              </div>
+            )}
+
+            {/* Audio autoplay fallback */}
+            {needsTap && state.phase === 'active' && (
+              <div className="absolute top-28 inset-x-4 z-30 flex justify-center">
+                <button
+                  onClick={forcePlay}
+                  className="glass px-4 py-2.5 rounded-2xl text-xs font-bold text-white flex items-center gap-2 shadow-xl cursor-pointer"
+                >
+                  <Volume2 className="w-4 h-4 text-emerald-300" />
+                  Tap to enable sound
+                </button>
               </div>
             )}
 
@@ -483,6 +537,14 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
                     title={muted ? 'Unmute' : 'Mute'}
                   >
                     {muted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                  </CtrlButton>
+
+                  <CtrlButton
+                    active={speakerMuted}
+                    onClick={onToggleSpeaker}
+                    title={speakerMuted ? 'Speaker on' : 'Speaker off'}
+                  >
+                    {speakerMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
                   </CtrlButton>
 
                   {isVideo && (

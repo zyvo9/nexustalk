@@ -80,6 +80,7 @@ export default function App() {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [muted, setMuted] = useState(false);
+  const [speakerMuted, setSpeakerMuted] = useState(false);
   const [camOff, setCamOff] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [callToast, setCallToast] = useState<string | null>(null);
@@ -596,6 +597,12 @@ export default function App() {
           onReject={() => getCallManager().reject()}
           onHangUp={() => getCallManager().hangUp()}
           onToggleMute={() => setMuted(getCallManager().toggleMute())}
+          onToggleSpeaker={() => {
+            setSpeakerMuted((prev) => {
+              getCallManager().setSpeakerMuted(!prev);
+              return !prev;
+            });
+          }}
           onToggleCamera={() => setCamOff(getCallManager().toggleCamera())}
           onToggleShare={() => {
             getCallManager()
