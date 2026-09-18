@@ -50,6 +50,14 @@ function fmtDuration(total: number) {
 
 const isVideoCall = (t: CallType) => t === 'video';
 
+// Shared AudioContext for level meters (browsers cap ~6 contexts)
+let sharedCtx: AudioContext | null = null;
+function getAudioCtx(): AudioContext {
+  if (!sharedCtx) sharedCtx = new AudioContext();
+  if (sharedCtx.state === 'suspended') sharedCtx.resume().catch(() => undefined);
+  return sharedCtx;
+}
+
 export const CallOverlay: React.FC<CallOverlayProps> = ({
   state,
   localStream,
@@ -76,6 +84,8 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
   const [seconds, setSeconds] = useState(0);
   const [speakerMuted, setSpeakerMuted] = useState(false);
   const [needsTap, setNeedsTap] = useState(false);
+  const [micLevel, setMicLevel] = useState(0);
+  const [remoteLevel, setRemoteLevel] = useState(0);
   const [chooser, setChooser] = useState<'none' | 'open'>('none');
   const [pickMode, setPickMode] = useState(false);
   const [controlTargets, setControlTargets] = useState<string[]>([]);
@@ -87,7 +97,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
       remoteAudioRef.current.volume = 1;
       remoteAudioRef.current.play().catch(() => setNeedsTap(true));
     }
-  }, [remoteStream, state.type]);
+  }, [remoteStream, state.type, state.phase]);
 
   // Video call: make sure the remote <video> is actually PLAYING (autoplay can block)
   useEffect(() => {
@@ -96,13 +106,74 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
       remoteVideoRef.current.volume = 1;
       remoteVideoRef.current.play().catch(() => setNeedsTap(true));
     }
-  }, [remoteStream, state.type]);
+  }, [remoteStream, state.type, state.phase]);
 
   // Speaker mute applies to whatever is playing the remote audio
   useEffect(() => {
     if (remoteAudioRef.current) remoteAudioRef.current.muted = speakerMuted;
     if (remoteVideoRef.current) remoteVideoRef.current.muted = speakerMuted;
   }, [speakerMuted, remoteStream]);
+
+  // ---- Audio level meters (pulse indicator): local mic + incoming audio ----
+  useEffect(() => {
+    if (!localStream) { setMicLevel(0); return; }
+    try {
+      const ctx = getAudioCtx();
+      const src = ctx.createMediaStreamSource(localStream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      src.connect(analyser);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      let raf = 0;
+      const loop = () => {
+        analyser.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) {
+          const v = (data[i] - 128) / 128;
+          sum += v * v;
+        }
+        setMicLevel((prev) => {
+          const next = Math.min(100, Math.round(Math.sqrt(sum / data.length) * 400));
+          return Math.abs(next - prev) > 2 ? next : prev;
+        });
+        raf = requestAnimationFrame(loop);
+      };
+      raf = requestAnimationFrame(loop);
+      return () => { cancelAnimationFrame(raf); src.disconnect(); };
+    } catch {
+      return;
+    }
+  }, [localStream]);
+
+  useEffect(() => {
+    if (!remoteStream) { setRemoteLevel(0); return; }
+    try {
+      const ctx = getAudioCtx();
+      const src = ctx.createMediaStreamSource(remoteStream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      src.connect(analyser);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      let raf = 0;
+      const loop = () => {
+        analyser.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) {
+          const v = (data[i] - 128) / 128;
+          sum += v * v;
+        }
+        setRemoteLevel((prev) => {
+          const next = Math.min(100, Math.round(Math.sqrt(sum / data.length) * 400));
+          return Math.abs(next - prev) > 2 ? next : prev;
+        });
+        raf = requestAnimationFrame(loop);
+      };
+      raf = requestAnimationFrame(loop);
+      return () => { cancelAnimationFrame(raf); src.disconnect(); };
+    } catch {
+      return;
+    }
+  }, [remoteStream]);
 
   const isVideo = state.type === 'video';
   const participants = state.peer ? [state.peer] : [];
@@ -191,8 +262,9 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
   useEffect(() => {
     if (localVideoRef.current && localStream) {
       localVideoRef.current.srcObject = localStream;
+      localVideoRef.current.play().catch(() => undefined);
     }
-  }, [localStream]);
+  }, [localStream, state.phase]);
 
   useEffect(() => {
     if (state.phase !== 'active') {
@@ -385,6 +457,30 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
                 </button>
               )}
             </div>
+
+            {/* Audio pulse meters (debug: is sound flowing?) */}
+            {(state.phase === 'active') && (
+              <div className="absolute top-28 inset-x-4 z-30 flex justify-center pointer-events-none">
+                <div className="glass px-4 py-2.5 rounded-2xl space-y-1.5 w-64">
+                  <div className="flex items-center gap-2">
+                    <Mic className={`w-3.5 h-3.5 shrink-0 ${micLevel > 4 ? 'text-emerald-300' : 'text-slate-500'}`} />
+                    <span className="text-[10px] font-semibold text-slate-400 w-14 shrink-0">MIC (you)</span>
+                    <div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                      <div className="h-full rounded-full accent-gradient transition-all duration-75" style={{ width: `${micLevel}%` }} />
+                    </div>
+                    <span className="text-[9px] font-mono text-slate-500 w-6 text-right">{micLevel}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Volume2 className={`w-3.5 h-3.5 shrink-0 ${remoteLevel > 4 ? 'text-emerald-300' : 'text-slate-500'}`} />
+                    <span className="text-[10px] font-semibold text-slate-400 w-14 shrink-0">THEM</span>
+                    <div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                      <div className="h-full rounded-full bg-emerald-400 transition-all duration-75" style={{ width: `${remoteLevel}%` }} />
+                    </div>
+                    <span className="text-[9px] font-mono text-slate-500 w-6 text-right">{remoteLevel}</span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Host: being-controlled warning */}
             {!!state.controlGrantedTo?.length && state.phase === 'active' && (
