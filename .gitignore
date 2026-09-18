@@ -19,6 +19,14 @@ agent/token.txt
 # Tools (cloudflared binary — 55MB)
 tools/
 
+# Desktop (Electron) build output
+desktop/dist/
+desktop/node_modules/
+
+# Android (Capacitor) build output
+nexustalk/android/
+nexustalk/node_modules/
+
 # OS junk
 Thumbs.db
 .DS_Store
