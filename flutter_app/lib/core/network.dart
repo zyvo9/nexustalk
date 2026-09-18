@@ -8,19 +8,25 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// screen and remembered (like CRD clients remember their host).
 class ServerConfig {
   static const _key = 'nexustalk_server';
+  static String? _cached;
 
   static Future<String> get() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_key) ?? '';
+    _cached = prefs.getString(_key) ?? '';
+    return _cached!;
   }
+
+  static String get cached => _cached ?? '';
 
   static Future<void> set(String url) async {
     final prefs = await SharedPreferences.getInstance();
     final clean = url.trim().replaceAll(RegExp(r'/+$'), '');
     if (clean.isEmpty) {
       await prefs.remove(_key);
+      _cached = '';
     } else {
       await prefs.setString(_key, clean);
+      _cached = clean;
     }
   }
 }
@@ -29,15 +35,18 @@ class ServerConfig {
 class Session {
   static const _tokenKey = 'nexustalk_token';
   static const _userKey = 'nexustalk_user';
+  static String? cachedToken;
 
   static Future<String?> token() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_tokenKey);
+    cachedToken = prefs.getString(_tokenKey);
+    return cachedToken;
   }
 
   static Future<void> saveToken(String token) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_tokenKey, token);
+    cachedToken = token;
   }
 
   static Future<Map<String, dynamic>?> user() async {
@@ -56,7 +65,15 @@ class Session {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_tokenKey);
     await prefs.remove(_userKey);
+    cachedToken = null;
   }
+}
+
+/// Builds an absolute, authenticated URL for server files/avatars.
+String serverAssetUrl(String path) {
+  final base = ServerConfig.cached;
+  final token = Session.cachedToken ?? '';
+  return '$base$path?token=${Uri.encodeComponent(token)}';
 }
 
 /// Tiny REST client: attaches the JWT, throws readable errors.

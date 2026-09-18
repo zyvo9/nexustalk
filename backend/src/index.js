@@ -19,9 +19,10 @@ await app.register(cors, {
   },
 });
 
-// Attach req.user for /api routes (login/register stay public)
+// Attach req.user for /api routes (public paths stay open)
 app.addHook('onRequest', async (req, reply) => {
   if (!req.url.startsWith('/api/')) return;
+  if (req.url.startsWith('/api/health')) return;
   if (req.url.startsWith('/api/auth/login') || req.url.startsWith('/api/auth/register')) return;
   const header = req.headers.authorization;
   const queryToken = req.query?.token;

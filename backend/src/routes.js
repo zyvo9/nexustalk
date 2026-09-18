@@ -25,6 +25,9 @@ async function uniqueUsername(base) {
 }
 
 export async function registerRoutes(app) {
+  // ---------------- health (public — the apps probe the server address) ----------------
+  app.get('/api/health', async () => ({ ok: true, name: 'NexusTalk', version: 2 }));
+
   // ---------------- auth ----------------
   app.post('/api/auth/register', async (req, reply) => {
     const { email, password, name } = req.body ?? {};
