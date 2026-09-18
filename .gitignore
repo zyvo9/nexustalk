@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build output
+nexustalk/dist/
+
+# Local database + logs (cloud e Turso thakbe)
+server/*.db
+server/*.db-wal
+server/*.db-shm
+agent/*.log
+agent/agent.log
+
+# Secrets — DEPLOY ER SOMOY KOKHONO PUSH KORBEN NA
+server/.env
+agent/agent_config.json
+agent/token.txt
+
+# Tools (cloudflared binary — 55MB)
+tools/
+
+# OS junk
+Thumbs.db
+.DS_Store

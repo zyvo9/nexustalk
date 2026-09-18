@@ -1,0 +1,6 @@
+{
+  "name": "NexusTalk",
+  "description": "WhatsApp-style messaging, screen sharing, and remote device control web app.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

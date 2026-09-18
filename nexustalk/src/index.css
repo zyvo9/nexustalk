@@ -1,0 +1,284 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* ============ Base ============ */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overscroll-behavior: none;
+}
+
+/* Android/iOS app feel: no tap flash, no accidental callouts */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+img,
+svg,
+.brand-mark {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Respect notches / gesture bars on phones */
+.pb-safe {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 6px);
+}
+
+@media (min-width: 768px) {
+  .pb-safe {
+    padding-bottom: 0;
+  }
+}
+
+/* Keep at least 16px on mobile so Android/iOS don't zoom inputs */
+@media (max-width: 767px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+* {
+  border-color: rgba(148, 163, 184, 0.09);
+}
+
+/* ============ Refined scrollbar ============ */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.22);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.4);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* ============ Design utilities ============ */
+
+/* Single brand gradient used for every primary action / active state */
+.accent-gradient {
+  background-image: linear-gradient(135deg, #6366f1 0%, #4f46e5 35%, #0ea5e9 100%);
+}
+
+.text-accent-gradient {
+  background-image: linear-gradient(135deg, #818cf8 0%, #38bdf8 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Text that must stay white on top of the accent gradient (both themes) */
+.on-accent {
+  color: #ffffff !important;
+}
+
+/* Frosted glass panel */
+.glass {
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+}
+
+/* Ambient aurora backdrop — place as first child of a relative container */
+.aurora-bg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.aurora-bg::before,
+.aurora-bg::after {
+  content: "";
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(100px);
+  will-change: transform;
+}
+
+.aurora-bg::before {
+  width: 560px;
+  height: 560px;
+  left: -160px;
+  top: -200px;
+  background: radial-gradient(circle at 35% 35%, rgba(99, 102, 241, 0.32), transparent 65%);
+  animation: aurora-drift 20s ease-in-out infinite alternate;
+}
+
+.aurora-bg::after {
+  width: 640px;
+  height: 640px;
+  right: -200px;
+  bottom: -240px;
+  background: radial-gradient(circle at 65% 65%, rgba(14, 165, 233, 0.24), transparent 65%);
+  animation: aurora-drift 26s ease-in-out infinite alternate-reverse;
+}
+
+@keyframes aurora-drift {
+  from {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    transform: translate3d(70px, 46px, 0) scale(1.14);
+  }
+}
+
+/* Subtle dot pattern for chat wallpapers */
+.wallpaper-dots {
+  background-image: radial-gradient(rgba(148, 163, 184, 0.13) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+/* ============ Motion ============ */
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.03) 0%,
+    rgba(255, 255, 255, 0.09) 50%,
+    rgba(255, 255, 255, 0.03) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s infinite;
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.3;
+  }
+  100% {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
+}
+
+.pulse-ring {
+  animation: pulse-ring 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ============ Light theme ============ */
+/* Unlayered rules below override Tailwind's layered utilities when the
+   root element carries the `light` class. */
+
+.light {
+  color-scheme: light;
+}
+
+.light .glass {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(15, 23, 42, 0.08);
+}
+
+.light .animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(15, 23, 42, 0.04) 0%,
+    rgba(15, 23, 42, 0.09) 50%,
+    rgba(15, 23, 42, 0.04) 100%
+  );
+  background-size: 200% 100%;
+}
+
+/* Surfaces */
+.light .bg-slate-950 { background-color: #eef1f8; }
+.light .bg-slate-950\/95 { background-color: rgba(240, 243, 249, 0.96); }
+.light .bg-slate-950\/90 { background-color: rgba(240, 243, 249, 0.94); }
+.light .bg-slate-950\/85 { background-color: rgba(240, 243, 249, 0.92); }
+.light .bg-slate-950\/80 { background-color: rgba(238, 241, 248, 0.92); }
+.light .bg-slate-950\/70 { background-color: rgba(238, 241, 248, 0.88); }
+.light .bg-slate-950\/60 { background-color: rgba(238, 241, 248, 0.85); }
+.light .bg-slate-950\/40 { background-color: rgba(238, 241, 248, 0.8); }
+
+.light .bg-slate-900 { background-color: #ffffff; }
+.light .bg-slate-900\/95 { background-color: rgba(255, 255, 255, 0.96); }
+.light .bg-slate-900\/90 { background-color: rgba(255, 255, 255, 0.94); }
+.light .bg-slate-900\/80 { background-color: rgba(255, 255, 255, 0.88); }
+.light .bg-slate-900\/70 { background-color: rgba(255, 255, 255, 0.8); }
+.light .bg-slate-900\/60 { background-color: rgba(244, 246, 251, 0.9); }
+.light .bg-slate-900\/50 { background-color: rgba(244, 246, 251, 0.75); }
+.light .bg-slate-900\/40 { background-color: rgba(244, 246, 251, 0.6); }
+
+.light .bg-slate-800 { background-color: #e4e9f2; }
+.light .bg-slate-800\/80 { background-color: rgba(228, 233, 242, 0.85); }
+.light .bg-slate-800\/70 { background-color: rgba(228, 233, 242, 0.75); }
+.light .bg-slate-800\/60 { background-color: rgba(228, 233, 242, 0.65); }
+.light .bg-slate-800\/40 { background-color: rgba(228, 233, 242, 0.5); }
+
+.light .bg-white\/5 { background-color: rgba(15, 23, 42, 0.045); }
+.light .bg-white\/10 { background-color: rgba(15, 23, 42, 0.07); }
+.light .bg-white\/20 { background-color: rgba(15, 23, 42, 0.11); }
+.light .hover\:bg-white\/5:hover { background-color: rgba(15, 23, 42, 0.05); }
+.light .hover\:bg-white\/10:hover { background-color: rgba(15, 23, 42, 0.08); }
+.light .hover\:bg-white\/20:hover { background-color: rgba(15, 23, 42, 0.12); }
+
+/* Borders & rings */
+.light .border-white\/5 { border-color: rgba(15, 23, 42, 0.07); }
+.light .border-white\/10 { border-color: rgba(15, 23, 42, 0.1); }
+.light .border-white\/20 { border-color: rgba(15, 23, 42, 0.15); }
+.light .ring-white\/10 { --tw-ring-color: rgba(15, 23, 42, 0.1); }
+
+/* Text */
+.light .text-slate-100 { color: #1c2637; }
+.light .text-slate-200 { color: #263247; }
+.light .text-slate-300 { color: #3a475c; }
+.light .text-slate-400 { color: #64748b; }
+.light .text-slate-500 { color: #7c8798; }
+.light .text-slate-600 { color: #94a3b8; }
+.light .hover\:text-white:hover { color: #0f172a; }
+.light .hover\:text-slate-200:hover { color: #1c2637; }
+
+.light .placeholder-slate-400::placeholder { color: #94a3b8; }
+.light .placeholder-slate-500::placeholder { color: #94a3b8; }
+.light .placeholder-slate-600::placeholder { color: #a6b1c3; }
+
+/* Wallpapers stay dark-tinted in dark theme; in light theme soften them */
+.light .wallpaper-dots {
+  background-image: radial-gradient(rgba(15, 23, 42, 0.08) 1px, transparent 1px);
+}

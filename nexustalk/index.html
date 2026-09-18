@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      (function() {
+        try {
+          var rawFetch = window.fetch;
+          var customFetch = rawFetch ? function() {
+            return rawFetch.apply(window, arguments);
+          } : null;
+          Object.defineProperty(window, 'fetch', {
+            get: function() {
+              return customFetch;
+            },
+            set: function(fn) {
+              customFetch = fn;
+            },
+            configurable: true,
+            enumerable: true
+          });
+        } catch (e) {
+          try {
+            var proto = Object.getPrototypeOf(window);
+            if (proto) {
+              var protoFetch = proto.fetch;
+              var customProtoFetch = protoFetch ? function() {
+                return protoFetch.apply(window, arguments);
+              } : null;
+              Object.defineProperty(proto, 'fetch', {
+                get: function() {
+                  return customFetch || customProtoFetch;
+                },
+                set: function(fn) {
+                  customFetch = fn;
+                },
+                configurable: true,
+                enumerable: true
+              });
+            }
+          } catch (e2) {}
+        }
+      })();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+    <title>NexusTalk — Secure Chat, Voice, Video & Remote Access</title>
+    <meta name="description" content="WhatsApp-style messaging, high-fps screen sharing, and seamless remote device control built into one elegant platform." />
+    <meta property="og:title" content="NexusTalk — Secure Chat, Voice, Video & Remote Access" />
+    <meta property="og:description" content="WhatsApp-style messaging, high-fps screen sharing, and seamless remote device control built into one elegant platform." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <!-- PWA / Android-friendly -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#070b15" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="NexusTalk" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  </head>
+  <body class="bg-slate-950 text-slate-100 antialiased selection:bg-indigo-500 selection:text-white font-['Plus_Jakarta_Sans',sans-serif]">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
