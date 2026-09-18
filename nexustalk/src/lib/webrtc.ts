@@ -16,10 +16,6 @@ export interface CallState {
   peer: CallPeer | null;
   message?: string;
   remoteSharing?: boolean;
-  /** Controller side: the host enabled remote control for me */
-  remoteControl?: boolean;
-  /** Host side: peers I granted control to (names, for the banner) */
-  controlGrantedTo?: string[];
 }
 
 const RTC_CONFIG: RTCConfiguration = {
@@ -42,7 +38,6 @@ const SIGNAL_EVENTS = [
   'call:ice',
   'call:end',
   'call:sharing',
-  'call:control',
 ] as const;
 
 /**
@@ -68,15 +63,6 @@ class CallManager {
   private connectTimeout: ReturnType<typeof setTimeout> | null = null;
   private pendingIce: RTCIceCandidateInit[] = [];
   private localSharing = false;
-  private controlChannel: RTCDataChannel | null = null;
-  private agentWs: WebSocket | null = null;
-  private controlEnabled = false;
-  private grantedPeers: string[] = [];
-  private lastStats: { bytes: number; ts: number } | null = null;
-
-  get isControlEnabled() {
-    return this.controlEnabled;
-  }
 
   constructor() {
     this.socket = getSocket();
@@ -317,99 +303,6 @@ class CallManager {
         this.setState({ ...this.state, remoteSharing: !!data.sharing });
         break;
       }
-
-      case 'call:control': {
-        // Host: the controller pressed "Stop" — revoke their access
-        if (data.on === false && this.controlEnabled) {
-          this.disableControl();
-          return;
-        }
-        // Controller side: host granted (or revoked) control to me
-        this.setState({ ...this.state, remoteControl: !!data.on });
-        break;
-      }
-    }
-  }
-
-  // ---------------------------------------------------------------- control mode (host)
-
-  /** Host: grant control to the selected peers. Connects to the localhost agent. */
-  async grantControl(peerIds: string[]): Promise<void> {
-    if (!this.agentWs || this.agentWs.readyState !== WebSocket.OPEN) {
-      this.agentWs = new WebSocket('ws://127.0.0.1:9991');
-      await new Promise<void>((resolve, reject) => {
-        const ws = this.agentWs!;
-        const timer = setTimeout(() => reject(new Error('Agent running korun (PC te start-agent.bat)')), 2500);
-        ws.onopen = () => { clearTimeout(timer); resolve(); };
-        ws.onerror = () => { clearTimeout(timer); reject(new Error('Agent running korun (PC te start-agent.bat)')); };
-      });
-    }
-    this.controlEnabled = true;
-    for (const id of peerIds) {
-      this.emitToPeerById(id, 'call:control', { on: true });
-    }
-    this.grantedPeers = peerIds;
-    this.setState({
-      ...this.state,
-      controlGrantedTo: peerIds
-        .map((id) => (id === this.peer?.id ? this.peer.name : id)),
-    });
-  }
-
-  /** Host: revoke control. */
-  disableControl() {
-    for (const id of this.grantedPeers) {
-      this.emitToPeerById(id, 'call:control', { on: false });
-    }
-    this.grantedPeers = [];
-    this.controlEnabled = false;
-    this.agentWs?.close();
-    this.agentWs = null;
-    this.setState({ ...this.state, controlGrantedTo: [] });
-  }
-
-  /** Controller: give up control (Stop button in the session view). */
-  releaseControl() {
-    if (this.peer) this.socket.emit('call:control', { to: this.peer.id, on: false });
-    this.setState({ ...this.state, remoteControl: false });
-  }
-
-  /** Controller: send an input event to the host (relayed to its agent). */
-  sendControlInput(obj: Record<string, unknown>) {
-    try {
-      this.controlChannel?.send(JSON.stringify(obj));
-    } catch {
-      /* channel not open */
-    }
-  }
-
-  /** Live session stats (RustDesk-style HUD): fps, latency, bitrate. */
-  async getStatsOnce(): Promise<{ fps: number; rtt: number; kbps: number } | null> {
-    if (!this.pc) return null;
-    try {
-      const report = await this.pc.getStats();
-      let fps = 0;
-      let rtt = 0;
-      let bytes = 0;
-      const ts = Date.now();
-      report.forEach((s: any) => {
-        if (s.type === 'inbound-rtp' && s.kind === 'video') {
-          fps = Math.round(s.framesPerSecond ?? 0);
-          bytes = s.bytesReceived ?? 0;
-        }
-        if (s.type === 'candidate-pair' && s.state === 'succeeded' && s.currentRoundTripTime != null) {
-          rtt = Math.round(s.currentRoundTripTime * 1000);
-        }
-      });
-      let kbps = 0;
-      if (this.lastStats) {
-        const dt = (ts - this.lastStats.ts) / 1000;
-        if (dt > 0) kbps = Math.round(((bytes - this.lastStats.bytes) * 8) / dt / 1000);
-      }
-      this.lastStats = { bytes, ts };
-      return { fps, rtt, kbps };
-    } catch {
-      return null;
     }
   }
 
@@ -471,24 +364,6 @@ class CallManager {
   private createPeerConnection() {
     const pc = new RTCPeerConnection(RTC_CONFIG);
     this.pc = pc;
-
-    // Control DataChannel — controller sends input, host relays to its agent
-    this.controlChannel = pc.createDataChannel('call-control', { ordered: true });
-    this.controlChannel.onmessage = (e) => {
-      if (this.controlEnabled && this.agentWs?.readyState === WebSocket.OPEN) {
-        this.agentWs.send(e.data);
-      }
-    };
-    pc.ondatachannel = (e) => {
-      if (e.channel.label === 'call-control') {
-        this.controlChannel = e.channel;
-        this.controlChannel.onmessage = (ev) => {
-          if (this.controlEnabled && this.agentWs?.readyState === WebSocket.OPEN) {
-            this.agentWs.send(ev.data);
-          }
-        };
-      }
-    };
 
     pc.onicecandidate = (e) => {
       if (e.candidate) this.emitToPeer('call:ice', { candidate: e.candidate.toJSON() });
@@ -558,15 +433,6 @@ class CallManager {
   private cleanup() {
     if (this.ringTimeout) clearTimeout(this.ringTimeout);
     if (this.connectTimeout) clearTimeout(this.connectTimeout);
-    if (this.controlEnabled) {
-      for (const id of this.grantedPeers) {
-        this.emitToPeerById(id, 'call:control', { on: false });
-      }
-    }
-    this.controlEnabled = false;
-    this.grantedPeers = [];
-    this.agentWs?.close();
-    this.agentWs = null;
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.screenStream?.getTracks().forEach((t) => t.stop());
     this.localStream = null;

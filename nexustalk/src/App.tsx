@@ -84,7 +84,12 @@ export default function App() {
   const [camOff, setCamOff] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [callToast, setCallToast] = useState<string | null>(null);
-  const [remoteSession, setRemoteSession] = useState(false);
+  // Remote control session (CRD-style): devices-tab request OR in-call agent session
+  const [remoteSession, setRemoteSession] = useState<
+    null | { mode: 'devices' } | { mode: 'agent'; hostName: string }
+  >(null);
+  // Host side: peers currently controlling MY PC via the agent
+  const [controlledPeers, setControlledPeers] = useState<Array<{ id: string; name: string }>>([]);
 
   // Host Consent Dialog & Remote Controlled Banner
   const [showConsentDialog, setShowConsentDialog] = useState(false);
@@ -242,6 +247,34 @@ export default function App() {
     cm.onState = (s) => setCallState({ ...s });
     cm.onLocalStream = (s) => setLocalStream(s);
     cm.onRemoteStream = (s) => setRemoteStream(s);
+  }, [isLoggedIn, me?.id]);
+
+  // ---- Agent remote-control session (CRD-style) ----
+  useEffect(() => {
+    if (!isLoggedIn || !me) return;
+    const socket = getSocket();
+    const onStarted = (d: any) => {
+      setRemoteSession({ mode: 'agent', hostName: d.hostName ?? 'Host' });
+      setCallToast(`${d.hostName ?? 'Host'} apnar PC er session chalu korlo — control live`);
+      setTimeout(() => setCallToast(null), 3000);
+    };
+    const onEnded = (d: any) => {
+      setRemoteSession((prev) => (prev?.mode === 'agent' ? null : prev));
+      setCallToast(`${d.hostName ?? 'Host'} control bondho korlo`);
+      setTimeout(() => setCallToast(null), 2600);
+    };
+    const onAgentOffline = () => {
+      setCallToast('Agent offline — apnar PC te start-agent.bat chalu korun');
+      setTimeout(() => setCallToast(null), 3200);
+    };
+    socket.on('remote:session-started', onStarted);
+    socket.on('remote:session-ended', onEnded);
+    socket.on('remote:agent-offline', onAgentOffline);
+    return () => {
+      socket.off('remote:session-started', onStarted);
+      socket.off('remote:session-ended', onEnded);
+      socket.off('remote:agent-offline', onAgentOffline);
+    };
   }, [isLoggedIn, me?.id]);
 
   const startCall = useCallback((type: CallType) => {
@@ -517,7 +550,7 @@ export default function App() {
             {/* Devices Tab Content (REAL remote control) */}
             {activeTab === 'devices' && (
               <div className="flex-1 h-full">
-                <DevicesTab onOpenSession={() => setRemoteSession(true)} />
+                <DevicesTab onOpenSession={() => setRemoteSession({ mode: 'devices' })} />
               </div>
             )}
 
@@ -617,35 +650,24 @@ export default function App() {
             setCallToast(message);
             setTimeout(() => setCallToast(null), 3000);
           }}
-          onGrantControl={(peerIds) => {
-            (async () => {
-              if (!sharing) {
-                await getCallManager()
-                  .toggleScreenShare()
-                  .then((s) => setSharing(s))
-                  .catch((err) => {
-                    setCallToast(err.message ?? 'Screen share failed');
-                    setTimeout(() => setCallToast(null), 3000);
-                    return;
-                  });
-              }
-              await getCallManager().grantControl(peerIds);
-              setCallToast('Remote control ON — apnar PC control korche');
-              setTimeout(() => setCallToast(null), 3000);
-            })();
+          onGrantRemoteControl={(peers) => {
+            const socket = getSocket();
+            peers.forEach((p) => socket.emit('agent:start-session', { to: p.id, toName: p.name }));
+            setControlledPeers((prev) => [
+              ...prev.filter((x) => !peers.some((p) => p.id === x.id)),
+              ...peers,
+            ]);
+            setCallToast(`Remote control ON — ${peers.map((p) => p.name).join(', ')} apnar PC control korche`);
+            setTimeout(() => setCallToast(null), 3200);
           }}
-          onDisableControl={() => {
-            getCallManager().disableControl();
+          onStopAllControl={() => {
+            const socket = getSocket();
+            controlledPeers.forEach((p) => socket.emit('agent:stop-session', { by: p.id }));
+            setControlledPeers([]);
             setCallToast('Remote control off');
             setTimeout(() => setCallToast(null), 2000);
           }}
-          onStopControlling={() => {
-            getCallManager().releaseControl();
-            setCallToast('Control released');
-            setTimeout(() => setCallToast(null), 2000);
-          }}
-          onControlInput={(obj) => getCallManager().sendControlInput(obj)}
-          getStats={() => getCallManager().getStatsOnce()}
+          controlledBy={controlledPeers.map((p) => p.name)}
         />
       )}
 
@@ -658,9 +680,13 @@ export default function App() {
         </div>
       )}
 
-      {/* REAL remote desktop session (controller side) */}
+      {/* REAL remote desktop session (CRD-style controller) */}
       {remoteSession && (
-        <RealRemoteSession onEnd={() => setRemoteSession(null)} />
+        remoteSession.mode === 'devices' ? (
+          <RealRemoteSession autoRequest onEnd={() => setRemoteSession(null)} />
+        ) : (
+          <RealRemoteSession hostName={remoteSession.hostName} onEnd={() => setRemoteSession(null)} />
+        )
       )}
 
       <ConsentDialog

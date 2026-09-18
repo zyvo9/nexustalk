@@ -45,72 +45,107 @@ sio = socketio.AsyncClient()
 mouse = MouseController()
 keyboard = KeyboardController()
 
-current_pc = None
-current_dc = None
-screen_track = None
+# Active controller sessions: controller_socket_id -> {pc, dc, track}
+sessions = {}
+capture = None  # shared ScreenCapture (created on first session)
 
 # Screen dimensions (updated by the capture track) for input normalization
 SCREEN_W = 1920
 SCREEN_H = 1080
 
 
-# ---------------------------------------------------------------- screen capture track
+# ---------------------------------------------------------------- screen capture
 
-class DxcamTrack(MediaStreamTrack):
-    """GPU-accelerated screen capture (DXGI Desktop Duplication via dxcam)."""
-    kind = "video"
+CURSOR_ARROW = [(0, 0), (0, 17), (4, 13), (6, 18), (9, 17), (7, 11), (12, 11)]
+
+
+class ScreenCapture:
+    """One shared capture source (dxcam GPU or mss fallback).
+
+    CRD-style: the OS cursor is NOT in the captured frames, so we draw it onto
+    every frame ourselves — the controller then sees the pointer move live.
+    Multiple sessions pull frames from this single instance.
+    """
 
     def __init__(self):
-        super().__init__()
-        self._camera = dxcam.create(output_idx=0, output_color="RGB", max_buffer_len=4)
+        self._camera = None
+        self._sct = None
+        self._monitor = None
+        self._last_pil = None
+        self.phys_w, self.phys_h = 1920, 1080
+        if HAS_DXCAM:
+            try:
+                import cv2  # noqa: F401 — dxcam needs cv2 inside its capture thread
+                self._camera = dxcam.create(output_idx=0, output_color="RGB", max_buffer_len=4)
+                if self._camera is not None:
+                    self._camera.start(target_fps=TARGET_FPS)
+                    print(f"capture: dxcam (GPU) @ {TARGET_FPS}fps")
+            except Exception as e:
+                print("dxcam failed, using mss:", e)
+                self._camera = None
         if self._camera is None:
-            raise RuntimeError("dxcam device busy")
-        self._camera.start(target_fps=TARGET_FPS)
-        self._last = None
-        self._stop = False
+            self._sct = mss.mss()
+            self._monitor = self._sct.monitors[1]
+            print(f"capture: mss fallback @ {TARGET_FPS}fps")
 
-    async def next_timestamp(self):
-        await asyncio.sleep(1 / (TARGET_FPS * 2))
-        return time.time(), 1 / TARGET_FPS
-
-    async def recv(self):
-        pts, time_base = await self.next_timestamp()
-        frame = self._grab()
-        frame.pts = pts
-        frame.time_base = time_base
-        return frame
-
-    def _grab(self):
-        f = self._camera.get_latest_frame()
-        if f is None and self._last is None:
-            time.sleep(0.01)
+    def grab(self):
+        from PIL import Image
+        if self._camera is not None:
             f = self._camera.get_latest_frame()
-        if f is not None:
-            self._last = f
+            if f is None:
+                if self._last_pil is not None:
+                    return self._last_pil
+                time.sleep(0.01)
+                f = self._camera.get_latest_frame()
+            if f is None:
+                return self._last_pil
+            self.phys_w, self.phys_h = f.shape[1], f.shape[0]
+            img = Image.fromarray(f)
         else:
-            f = self._last
-        h, w = f.shape[:2]
-        global SCREEN_W, SCREEN_H
-        SCREEN_W, SCREEN_H = w, h
-        return VideoFrame.from_ndarray(f, format="rgb24")
+            shot = self._sct.grab(self._monitor)
+            img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+            self.phys_w, self.phys_h = img.size
+            if img.width > MAX_WIDTH:
+                ratio = MAX_WIDTH / img.width
+                img = img.resize((MAX_WIDTH, int(img.height * ratio)), Image.LANCZOS)
+        self._draw_cursor(img)
+        self._last_pil = img
+        return img
 
-    def stop(self):
-        self._stop = True
+    def _draw_cursor(self, img):
+        from PIL import ImageDraw
         try:
-            self._camera.stop()
+            sx = img.width / self.phys_w
+            sy = img.height / self.phys_h
+            mx, my = mouse.position
+            x, y = mx * sx, my * sy
+            s = max(1.2, img.height / 540)  # cursor scales with frame size
+            pts = [(x + px * s, y + py * s) for (px, py) in CURSOR_ARROW]
+            d = ImageDraw.Draw(img)
+            d.polygon(pts, fill=(15, 15, 15), outline=(255, 255, 255))
         except Exception:
             pass
 
+    def stop(self):
+        if self._camera is not None:
+            try:
+                self._camera.stop()
+            except Exception:
+                pass
+        if self._sct is not None:
+            try:
+                self._sct.close()
+            except Exception:
+                pass
 
-class MssTrack(MediaStreamTrack):
-    """Fallback screen capture (GDI via mss) when dxcam is unavailable."""
+
+class CaptureTrack(MediaStreamTrack):
+    """Per-session video track reading from the shared ScreenCapture."""
     kind = "video"
 
-    def __init__(self):
+    def __init__(self, cap: ScreenCapture):
         super().__init__()
-        self._sct = mss.mss()
-        self._monitor = self._sct.monitors[1]
-        self._stop = False
+        self._cap = cap
 
     async def next_timestamp(self):
         await asyncio.sleep(1 / TARGET_FPS)
@@ -118,38 +153,13 @@ class MssTrack(MediaStreamTrack):
 
     async def recv(self):
         pts, time_base = await self.next_timestamp()
-        shot = self._sct.grab(self._monitor)
-        from PIL import Image
-        img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-        if img.width > MAX_WIDTH:
-            ratio = MAX_WIDTH / img.width
-            img = img.resize((MAX_WIDTH, int(img.height * ratio)), Image.LANCZOS)
+        img = self._cap.grab()
         global SCREEN_W, SCREEN_H
         SCREEN_W, SCREEN_H = img.width, img.height
         frame = VideoFrame.from_image(img)
         frame.pts = pts
         frame.time_base = time_base
         return frame
-
-    def stop(self):
-        self._stop = True
-        try:
-            self._sct.close()
-        except Exception:
-            pass
-
-
-def create_screen_track():
-    if HAS_DXCAM:
-        try:
-            import cv2  # dxcam needs cv2 inside its capture thread — check up front
-            track = DxcamTrack()
-            print(f"capture: dxcam (GPU) @ {TARGET_FPS}fps")
-            return track
-        except Exception as e:
-            print("dxcam failed, falling back to mss:", e)
-    print(f"capture: mss fallback @ {TARGET_FPS}fps")
-    return MssTrack()
 
 
 # ---------------------------------------------------------------- input injection
@@ -237,23 +247,21 @@ def build_pc():
     ))
 
 
-async def start_session(controller_socket_id: str):
-    global current_pc, current_dc, screen_track
+async def start_session(controller_socket_id: str, from_name: str = ""):
+    global capture
+    print(f"controller connected: {controller_socket_id} ({from_name})", flush=True)
 
-    if current_pc:
-        print("existing session found — new controller takes over", flush=True)
-        await end_session()
+    if controller_socket_id in sessions:
+        await end_session_for(controller_socket_id)
+    if capture is None:
+        capture = ScreenCapture()
 
-    print("controller connected:", controller_socket_id, flush=True)
     pc = build_pc()
-    current_pc = pc
-
-    screen_track = create_screen_track()
-    pc.addTrack(screen_track)
+    track = CaptureTrack(capture)
+    pc.addTrack(track)
     pc.addTrack(AudioStreamTrack())  # silent audio keeps the connection stable
 
     channel = pc.createDataChannel("control", ordered=True)
-    current_dc = channel
 
     @channel.on("message")
     def on_message(message):
@@ -266,7 +274,9 @@ async def start_session(controller_socket_id: str):
     async def on_state():
         print("pc state:", pc.connectionState)
         if pc.connectionState in ("failed", "closed"):
-            await end_session()
+            await end_session_for(controller_socket_id)
+
+    sessions[controller_socket_id] = {"pc": pc, "dc": channel, "track": track}
 
     offer = await pc.createOffer()
     await pc.setLocalDescription(offer)
@@ -274,21 +284,31 @@ async def start_session(controller_socket_id: str):
         "to": controller_socket_id,
         "sdp": {"type": pc.localDescription.type, "sdp": pc.localDescription.sdp},
     })
+    print(f"session streaming — {len(sessions)} controller(s) active")
 
 
-async def end_session():
-    global current_pc, current_dc, screen_track
-    if screen_track:
-        screen_track.stop()
-    if current_pc:
-        try:
-            await current_pc.close()
-        except Exception:
-            pass
-    current_pc = None
-    current_dc = None
-    screen_track = None
-    print("session ended")
+async def end_session_for(controller_socket_id: str):
+    global capture
+    sess = sessions.pop(controller_socket_id, None)
+    if not sess:
+        return
+    try:
+        await sess["pc"].close()
+    except Exception:
+        pass
+    try:
+        sess["track"].stop()
+    except Exception:
+        pass
+    print(f"session ended for {controller_socket_id} — {len(sessions)} controller(s) left")
+    if not sessions and capture is not None:
+        capture.stop()
+        capture = None
+
+
+async def end_all_sessions():
+    for cid in list(sessions.keys()):
+        await end_session_for(cid)
 
 
 # ---------------------------------------------------------------- socket events
@@ -301,28 +321,34 @@ async def connect():
 
 @sio.on("remote:session-request")
 async def on_request(data):
-    await start_session(data["from"])
+    await start_session(data["from"], data.get("fromName", ""))
 
 
 @sio.on("remote:answer")
 async def on_answer(data):
-    if current_pc:
-        await current_pc.setRemoteDescription(RTCSessionDescription(data["sdp"]["sdp"], data["sdp"]["type"]))
+    sess = sessions.get(data.get("from"))
+    if sess:
+        await sess["pc"].setRemoteDescription(RTCSessionDescription(data["sdp"]["sdp"], data["sdp"]["type"]))
         print("answer applied — STREAMING! (controller can see your screen now)")
 
 
 @sio.on("remote:ice")
 async def on_ice(data):
-    if current_pc and data.get("candidate"):
+    sess = sessions.get(data.get("from"))
+    if sess and data.get("candidate"):
         try:
-            await current_pc.addIceCandidate(data["candidate"])
+            await sess["pc"].addIceCandidate(data["candidate"])
         except Exception:
             pass
 
 
 @sio.on("remote:end")
 async def on_remote_end(data):
-    await end_session()
+    target = data.get("to")
+    if target and target in sessions:
+        await end_session_for(target)
+    else:
+        await end_all_sessions()
 
 
 # ---------------------------------------------------------------- local input server

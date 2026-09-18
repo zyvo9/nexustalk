@@ -14,6 +14,7 @@ process.on('unhandledRejection', (err) => console.error('unhandledRejection (ser
 
 // userId → agent socket id (the remote-control host agent)
 const agentSockets = new Map();
+const userSockets = new Map();
 
 // CORS: localhost for dev + extra origins (comma separated) for deploy
 const extraOrigins = (process.env.ALLOWED_ORIGINS || '')
@@ -58,6 +59,7 @@ io.on('connection', (socket) => {
 
   // Personal room — used for calls invites, notifications etc. later.
   socket.join(`user:${me.id}`);
+  userSockets.set(me.id, socket.id);
 
   socket.on('chat:join', ({ chatId }) => {
     if (!chatId) return;
@@ -125,7 +127,6 @@ io.on('connection', (socket) => {
     'call:ice',       // { to, candidate }               → ICE candidates
     'call:end',       // { to }                          → hang up
     'call:sharing',   // { to, sharing }                 → screen share state
-    'call:control',   // { to, on }                      → grant/revoke remote control
   ].forEach(relayTo);
 
   // ---- Remote control (host agent registry + relay) ----
@@ -156,11 +157,43 @@ io.on('connection', (socket) => {
   };
   ['remote:offer', 'remote:answer', 'remote:ice', 'remote:end'].forEach(relayRemote);
 
+  // ---- In-call remote control (CRD-style: the HOST's agent streams to the peer) ----
+  // Host grants: agent session starts, streaming the host's screen straight to the peer.
+  socket.on('agent:start-session', (data = {}) => {
+    const agentSocketId = agentSockets.get(me.id);
+    const controllerSocketId = userSockets.get(data.to);
+    if (!agentSocketId) {
+      socket.emit('remote:agent-offline');
+      return;
+    }
+    if (!controllerSocketId) {
+      socket.emit('remote:peer-offline');
+      return;
+    }
+    io.to(agentSocketId).emit('remote:session-request', { from: controllerSocketId, fromName: data.toName || '' });
+    io.to(controllerSocketId).emit('remote:session-started', { hostName: me.name, hostId: me.id });
+  });
+
+  // Host stops: end every session the peer has on my agent.
+  socket.on('agent:stop-session', (data = {}) => {
+    const agentSocketId = agentSockets.get(me.id);
+    const controllerSocketId = userSockets.get(data.by);
+    if (agentSocketId) {
+      io.to(agentSocketId).emit('remote:end', { to: controllerSocketId });
+    }
+    if (controllerSocketId) {
+      io.to(controllerSocketId).emit('remote:session-ended', { hostName: me.name });
+    }
+  });
+
   socket.on('disconnect', () => {
     if (!me) return;
     if (agentSockets.get(me.id) === socket.id) {
       agentSockets.delete(me.id);
       io.to(`user:${me.id}`).emit('agent:status', { online: false });
+    }
+    if (userSockets.get(me.id) === socket.id) {
+      userSockets.delete(me.id);
     }
   });
 });

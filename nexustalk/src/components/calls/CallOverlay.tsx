@@ -12,15 +12,10 @@ import {
   MonitorUp,
   MonitorX,
   X,
-  AtSign,
   MousePointerClick,
   Eye,
   UserCheck,
-  AlertTriangle,
-  Maximize2,
-  Minimize2,
-  ClipboardPaste,
-  Activity
+  AlertTriangle
 } from 'lucide-react';
 import { Avatar } from '../common/Avatar';
 import type { CallState, CallType } from '../../lib/webrtc';
@@ -33,6 +28,8 @@ interface CallOverlayProps {
   camOff: boolean;
   sharing: boolean;
   shareSupported: boolean;
+  /** Names of people currently controlling THIS PC via the agent */
+  controlledBy: string[];
   onAccept: () => void;
   onReject: () => void;
   onHangUp: () => void;
@@ -41,11 +38,9 @@ interface CallOverlayProps {
   onToggleCamera: () => void;
   onToggleShare: () => void;
   onShareError: (message: string) => void;
-  onGrantControl: (peerIds: string[]) => void;
-  onDisableControl: () => void;
-  onStopControlling: () => void;
-  onControlInput: (obj: Record<string, unknown>) => void;
-  getStats?: () => Promise<{ fps: number; rtt: number; kbps: number } | null>;
+  /** Start an agent remote-control session for the selected peers (CRD-style) */
+  onGrantRemoteControl: (peers: Array<{ id: string; name: string }>) => void;
+  onStopAllControl: () => void;
 }
 
 function fmtDuration(total: number) {
@@ -72,6 +67,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
   camOff,
   sharing,
   shareSupported,
+  controlledBy,
   onAccept,
   onReject,
   onHangUp,
@@ -80,16 +76,12 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
   onToggleCamera,
   onToggleShare,
   onShareError,
-  onGrantControl,
-  onDisableControl,
-  onStopControlling,
-  onControlInput,
-  getStats,
+  onGrantRemoteControl,
+  onStopAllControl,
 }) => {
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
-  const sessionWrapRef = useRef<HTMLDivElement>(null);
   const [seconds, setSeconds] = useState(0);
   const [speakerMuted, setSpeakerMuted] = useState(false);
   const [needsTap, setNeedsTap] = useState(false);
@@ -97,40 +89,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
   const [remoteLevel, setRemoteLevel] = useState(0);
   const [chooser, setChooser] = useState<'none' | 'open'>('none');
   const [pickMode, setPickMode] = useState(false);
-  const [controlTargets, setControlTargets] = useState<string[]>([]);
-  const [isFs, setIsFs] = useState(false);
-  const [stats, setStats] = useState<{ fps: number; rtt: number; kbps: number } | null>(null);
-  const [clipMsg, setClipMsg] = useState<string | null>(null);
-
-  const controllerActive = state.phase === 'active' && !!state.remoteControl;
-
-  // RustDesk-style stats HUD while controlling
-  useEffect(() => {
-    if (!controllerActive || !getStats) { setStats(null); return; }
-    let stop = false;
-    const poll = async () => {
-      while (!stop) {
-        const s = await getStats();
-        if (!stop) setStats(s);
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-    };
-    poll();
-    return () => { stop = true; };
-  }, [controllerActive, getStats]);
-
-  // Clipboard sync: controller's clipboard → remote PC clipboard
-  const pasteToRemote = async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (!text) { setClipMsg('Clipboard empty'); setTimeout(() => setClipMsg(null), 2000); return; }
-      onControlInput({ t: 'clip', text: text.slice(0, 100000) });
-      setClipMsg('Remote clipboard set — Ctrl+V on the remote PC');
-    } catch {
-      setClipMsg('Clipboard read blocked by browser');
-    }
-    setTimeout(() => setClipMsg(null), 2400);
-  };
+  const [controlTargets, setControlTargets] = useState<Array<{ id: string; name: string }>>([]);
 
   // Remote audio playback (critical for voice calls — no <video> element there)
   useEffect(() => {
@@ -179,6 +138,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
           return Math.abs(next - prev) > 2 ? next : prev;
         });
         raf = requestAnimationFrame(loop);
+        return undefined;
       };
       raf = requestAnimationFrame(loop);
       return () => { cancelAnimationFrame(raf); src.disconnect(); };
@@ -209,6 +169,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
           return Math.abs(next - prev) > 2 ? next : prev;
         });
         raf = requestAnimationFrame(loop);
+        return undefined;
       };
       raf = requestAnimationFrame(loop);
       return () => { cancelAnimationFrame(raf); src.disconnect(); };
@@ -216,156 +177,6 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
       return;
     }
   }, [remoteStream]);
-
-  const isVideo = state.type === 'video';
-  const participants = state.peer ? [state.peer] : [];
-
-  const forcePlay = () => {
-    setNeedsTap(false);
-    remoteVideoRef.current?.play().catch(() => undefined);
-    remoteAudioRef.current?.play().catch(() => undefined);
-  };
-
-  const handleShareTap = () => {
-    if (sharing || state.controlGrantedTo?.length) {
-      // already sharing — toggle off / revoke control
-      if (state.controlGrantedTo?.length) onDisableControl();
-      onToggleShare();
-      setChooser('none');
-      return;
-    }
-    setChooser((c) => (c === 'open' ? 'none' : 'open'));
-    setPickMode(false);
-    setControlTargets([]);
-  };
-
-  const startScreenShare = () => {
-    setChooser('none');
-    try {
-      onToggleShare();
-    } catch (err: any) {
-      onShareError(err.message ?? 'Screen share failed');
-    }
-  };
-
-  const grantControl = () => {
-    setChooser('none');
-    if (!controlTargets.length) return;
-    try {
-      onGrantControl(controlTargets);
-    } catch (err: any) {
-      onShareError(err.message ?? 'Could not enable control');
-    }
-  };
-
-  // ---- CRD-accurate coordinate mapping ----
-  // The video is letterboxed (object-contain in session view): convert the
-  // pointer position relative to the ACTUAL displayed video content, not the element.
-  const contentPos = (clientX: number, clientY: number) => {
-    const v = remoteVideoRef.current;
-    if (!v) return null;
-    const rect = v.getBoundingClientRect();
-    const vw = v.videoWidth || rect.width;
-    const vh = v.videoHeight || rect.height;
-    const scale = controllerActive
-      ? Math.min(rect.width / vw, rect.height / vh)   // contain (session view)
-      : Math.max(rect.width / vw, rect.height / vh);  // cover (normal call)
-    const cw = vw * scale;
-    const ch = vh * scale;
-    const ox = rect.left + (rect.width - cw) / 2;
-    const oy = rect.top + (rect.height - ch) / 2;
-    return {
-      x: Math.min(1, Math.max(0, (clientX - ox) / cw)),
-      y: Math.min(1, Math.max(0, (clientY - oy) / ch)),
-    };
-  };
-
-  const lastMove = useRef(0);
-  const onMouseMove = (e: React.MouseEvent) => {
-    if (!controllerActive) return;
-    const now = Date.now();
-    if (now - lastMove.current < 12) return; // ~60Hz for smooth control
-    lastMove.current = now;
-    const p = contentPos(e.clientX, e.clientY);
-    if (p) onControlInput({ t: 'mm', ...p });
-  };
-  const onMouseDown = (e: React.MouseEvent) => {
-    if (!controllerActive) return;
-    const p = contentPos(e.clientX, e.clientY);
-    if (p) onControlInput({ t: 'md', ...p, btn: e.button === 2 ? 'right' : 'left' });
-  };
-  const onMouseUp = (e: React.MouseEvent) => {
-    if (!controllerActive) return;
-    onControlInput({ t: 'mu', btn: e.button === 2 ? 'right' : 'left' });
-  };
-  // Native non-passive wheel listener (React wheel is passive — preventDefault needs this)
-  useEffect(() => {
-    const el = sessionWrapRef.current;
-    if (!el || !controllerActive) return;
-    const h = (ev: WheelEvent) => {
-      ev.preventDefault();
-      onControlInput({ t: 'sc', dy: Math.max(-5, Math.min(5, Math.round(-ev.deltaY / 100))) });
-    };
-    el.addEventListener('wheel', h, { passive: false });
-    return () => el.removeEventListener('wheel', h);
-  }, [controllerActive]);
-  const mapKey = (e: React.KeyboardEvent) =>
-    e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase().replace('arrow', '').replace('escape', 'esc');
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (!controllerActive) return;
-    if (e.key === 'Escape' && document.fullscreenElement) return; // ESC exits fullscreen natively
-    e.preventDefault();
-    onControlInput({ t: 'kd', key: mapKey(e) });
-  };
-  const onKeyUp = (e: React.KeyboardEvent) => {
-    if (!controllerActive) return;
-    e.preventDefault();
-    onControlInput({ t: 'ku', key: mapKey(e) });
-  };
-
-  // Session view: focus so keyboard goes to the remote PC, and hide the local cursor
-  useEffect(() => {
-    if (controllerActive) sessionWrapRef.current?.focus();
-  }, [controllerActive]);
-
-  const toggleFullscreen = () => {
-    const el = sessionWrapRef.current;
-    if (!el) return;
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => undefined);
-    else el.requestFullscreen?.().catch(() => undefined);
-  };
-  useEffect(() => {
-    const h = () => setIsFs(!!document.fullscreenElement);
-    document.addEventListener('fullscreenchange', h);
-    return () => document.removeEventListener('fullscreenchange', h);
-  }, []);
-
-  // ---- Touch support (phone controller): tap = click, drag = move ----
-  const touchPos = (e: React.TouchEvent) => {
-    const t = e.touches[0] ?? e.changedTouches[0];
-    return contentPos(t.clientX, t.clientY) ?? { x: 0, y: 0 };
-  };
-
-  const onTouchStart = (e: React.TouchEvent) => {
-    if (!controllerActive) return;
-    e.preventDefault();
-    onControlInput({ t: 'md', ...touchPos(e), btn: 'left' });
-  };
-
-  const onTouchMove = (e: React.TouchEvent) => {
-    if (!controllerActive) return;
-    e.preventDefault();
-    const now = Date.now();
-    if (now - lastMove.current < 24) return;
-    lastMove.current = now;
-    onControlInput({ t: 'ms', ...touchPos(e), btn: 'left' });
-  };
-
-  const onTouchEnd = (e: React.TouchEvent) => {
-    if (!controllerActive) return;
-    e.preventDefault();
-    onControlInput({ t: 'mu', btn: 'left' });
-  };
 
   useEffect(() => {
     if (remoteVideoRef.current && remoteStream) {
@@ -388,6 +199,44 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
     const timer = setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => clearInterval(timer);
   }, [state.phase]);
+
+  const isVideo = state.type === 'video';
+  const participants = state.peer ? [state.peer] : [];
+
+  const forcePlay = () => {
+    setNeedsTap(false);
+    remoteVideoRef.current?.play().catch(() => undefined);
+    remoteAudioRef.current?.play().catch(() => undefined);
+  };
+
+  const handleShareTap = () => {
+    if (sharing) {
+      onToggleShare();
+      return;
+    }
+    setChooser((c) => (c === 'open' ? 'none' : 'open'));
+    setPickMode(false);
+    setControlTargets([]);
+  };
+
+  const startScreenShare = () => {
+    setChooser('none');
+    try {
+      onToggleShare();
+    } catch (err: any) {
+      onShareError(err.message ?? 'Screen share failed');
+    }
+  };
+
+  const grantControl = () => {
+    setChooser('none');
+    if (!controlTargets.length) return;
+    try {
+      onGrantRemoteControl(controlTargets);
+    } catch (err: any) {
+      onShareError(err.message ?? 'Could not start remote control');
+    }
+  };
 
   const peer = state.peer;
 
@@ -483,32 +332,15 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
 
         {/* ================= ACTIVE / ENDED ================= */}
         {(state.phase === 'active' || state.phase === 'ended') && (
-          <div
-            ref={sessionWrapRef}
-            className={`flex-1 relative overflow-hidden bg-[#0a0f1c] outline-none ${
-              controllerActive ? 'cursor-none select-none' : ''
-            }`}
-            tabIndex={controllerActive ? 0 : -1}
-            onMouseMove={onMouseMove}
-            onMouseDown={onMouseDown}
-            onMouseUp={onMouseUp}
-            onKeyDown={onKeyDown}
-            onKeyUp={onKeyUp}
-            onTouchStart={onTouchStart}
-            onTouchMove={onTouchMove}
-            onTouchEnd={onTouchEnd}
-            onContextMenu={(e) => controllerActive && e.preventDefault()}
-          >
+          <div className="flex-1 relative overflow-hidden bg-[#0a0f1c] outline-none">
             {isVideo ? (
               <>
-                {/* Remote video — full-bleed in a call, letterboxed in a control session */}
+                {/* Remote video fullscreen */}
                 <video
                   ref={remoteVideoRef}
                   autoPlay
                   playsInline
-                  className={`absolute inset-0 w-full h-full bg-black ${
-                    controllerActive ? 'object-contain cursor-none' : 'object-cover'
-                  }`}
+                  className="absolute inset-0 w-full h-full object-cover bg-black"
                 />
                 {!remoteStream && (
                   <div className="absolute inset-0 flex items-center justify-center">
@@ -516,8 +348,8 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
                   </div>
                 )}
 
-                {/* Local PiP (hidden while remote is controlling — they see their own actions) */}
-                {localStream && !controllerActive && (
+                {/* Local PiP */}
+                {localStream && (
                   <video
                     ref={localVideoRef}
                     autoPlay
@@ -579,8 +411,8 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
               )}
             </div>
 
-            {/* Audio pulse meters (debug: is sound flowing?) — hidden in control session */}
-            {(state.phase === 'active' && !controllerActive) && (
+            {/* Audio pulse meters (debug: is sound flowing?) */}
+            {(state.phase === 'active') && (
               <div className="absolute top-28 inset-x-4 z-30 flex justify-center pointer-events-none">
                 <div className="glass px-4 py-2.5 rounded-2xl space-y-1.5 w-64">
                   <div className="flex items-center gap-2">
@@ -603,68 +435,19 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
               </div>
             )}
 
-            {/* Host: being-controlled warning */}
-            {!!state.controlGrantedTo?.length && state.phase === 'active' && (
+            {/* Host: being-controlled warning (agent session live) */}
+            {!!controlledBy.length && state.phase === 'active' && (
               <div className="absolute top-16 inset-x-4 z-30 flex justify-center pointer-events-none">
                 <div className="bg-amber-400 text-amber-950 px-4 py-2 rounded-2xl text-xs font-bold flex items-center gap-2 shadow-xl pointer-events-auto">
                   <AlertTriangle className="w-4 h-4" />
-                  {state.controlGrantedTo.join(', ')} can control your PC
+                  {controlledBy.join(', ')} can control your PC
                   <button
-                    onClick={onDisableControl}
+                    onClick={onStopAllControl}
                     className="ml-1 px-2.5 py-1 rounded-lg bg-black/25 hover:bg-black/40 text-[11px] uppercase cursor-pointer"
                   >
                     Stop
                   </button>
                 </div>
-              </div>
-            )}
-
-            {/* Controller: CRD-style floating session toolbar */}
-            {controllerActive && (
-              <div className="absolute top-4 inset-x-0 z-40 flex flex-col items-center gap-2 pointer-events-none">
-                <div className="pointer-events-auto glass rounded-full pl-4 pr-2 py-2 flex items-center gap-3 shadow-2xl max-w-[94vw]">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-                  <span className="text-xs font-semibold text-white truncate">
-                    Controlling {peer?.name?.split(' ')[0]}'s PC
-                  </span>
-                  <span className="font-mono text-[11px] text-emerald-300 shrink-0">{fmtDuration(seconds)}</span>
-                  {stats && (
-                    <span
-                      className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-slate-300 shrink-0 flex items-center gap-1"
-                      title={`${stats.kbps} kbps`}
-                    >
-                      <Activity className="w-3 h-3 text-sky-300" />
-                      {stats.fps} FPS · {stats.rtt}ms
-                    </span>
-                  )}
-                  <span className="w-px h-4 bg-white/15 shrink-0" />
-                  <button
-                    onClick={pasteToRemote}
-                    title="Copy my clipboard to the remote PC"
-                    className="p-1.5 rounded-full hover:bg-white/10 text-slate-300 cursor-pointer shrink-0"
-                  >
-                    <ClipboardPaste className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={toggleFullscreen}
-                    title={isFs ? 'Exit fullscreen' : 'Fullscreen'}
-                    className="p-1.5 rounded-full hover:bg-white/10 text-slate-300 cursor-pointer shrink-0"
-                  >
-                    {isFs ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-                  </button>
-                  <button
-                    onClick={onStopControlling}
-                    title="Stop controlling"
-                    className="px-3 py-1.5 rounded-full bg-rose-600 hover:bg-rose-500 on-accent text-[11px] font-bold flex items-center gap-1 cursor-pointer shrink-0"
-                  >
-                    <X className="w-3.5 h-3.5" /> Stop
-                  </button>
-                </div>
-                {clipMsg && (
-                  <div className="pointer-events-none glass px-3.5 py-1.5 rounded-2xl text-[11px] font-semibold text-white shadow-xl">
-                    {clipMsg}
-                  </div>
-                )}
               </div>
             )}
 
@@ -718,7 +501,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
                       </span>
                       <span>
                         <span className="block text-sm font-semibold text-white">Remote control</span>
-                        <span className="block text-[11px] text-slate-400">They can control your PC</span>
+                        <span className="block text-[11px] text-slate-400">They control your PC — CRD style</span>
                       </span>
                     </button>
                     <button onClick={() => setChooser('none')} className="w-full text-center py-1.5 text-[11px] text-slate-500 hover:text-slate-300 cursor-pointer">
@@ -732,13 +515,15 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
                       Give control to:
                     </p>
                     {participants.map((p) => {
-                      const selected = controlTargets.includes(p.id);
+                      const selected = controlTargets.some((t) => t.id === p.id);
                       return (
                         <button
                           key={p.id}
                           onClick={() =>
                             setControlTargets((prev) =>
-                              prev.includes(p.id) ? prev.filter((x) => x !== p.id) : [...prev, p.id]
+                              prev.some((t) => t.id === p.id)
+                                ? prev.filter((t) => t.id !== p.id)
+                                : [...prev, { id: p.id, name: p.name }]
                             )
                           }
                           className={`w-full flex items-center gap-3 p-2.5 rounded-2xl text-left cursor-pointer transition-colors ${
@@ -776,15 +561,15 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
                       </button>
                     </div>
                     <p className="text-[10px] text-slate-500 text-center pt-1.5">
-                      Screen share auto-starts with control · needs the agent running on your PC
+                      Streams your screen via the agent — the agent app must be running on this PC
                     </p>
                   </div>
                 )}
               </div>
             )}
 
-            {/* Bottom controls — hidden while actively controlling (CRD-style clean view) */}
-            {state.phase === 'active' && !controllerActive && (
+            {/* Bottom controls */}
+            {state.phase === 'active' && (
               <div className="absolute bottom-6 inset-x-0 flex justify-center z-20 pointer-events-none">
                 <div className="pointer-events-auto flex items-center gap-2.5 sm:gap-3.5 p-3 px-4 rounded-full glass shadow-2xl">
                   <CtrlButton
@@ -815,7 +600,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
 
                   {isVideo && shareSupported && (
                     <CtrlButton
-                      active={sharing || !!state.controlGrantedTo?.length}
+                      active={sharing}
                       accent
                       onClick={handleShareTap}
                       title={sharing ? 'Stop sharing' : 'Share screen or give control'}
