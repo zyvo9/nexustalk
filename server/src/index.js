@@ -125,6 +125,7 @@ io.on('connection', (socket) => {
     'call:ice',       // { to, candidate }               → ICE candidates
     'call:end',       // { to }                          → hang up
     'call:sharing',   // { to, sharing }                 → screen share state
+    'call:control',   // { to, on }                      → grant/revoke remote control
   ].forEach(relayTo);
 
   // ---- Remote control (host agent registry + relay) ----

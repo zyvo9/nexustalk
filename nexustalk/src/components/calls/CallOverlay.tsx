@@ -253,6 +253,45 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
     onControlInput({ t: 'ku', key: mapKey(e) });
   };
 
+  // ---- Touch support (phone controller): tap = click, drag = move ----
+  const touchPos = (e: React.TouchEvent) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const t = e.touches[0] ?? e.changedTouches[0];
+    return {
+      x: Math.min(1, Math.max(0, (t.clientX - rect.left) / rect.width)),
+      y: Math.min(1, Math.max(0, (t.clientY - rect.top) / rect.height)),
+    };
+  };
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    if (!controllerActive) return;
+    e.preventDefault();
+    sendControlTouch(e, 'md');
+  };
+
+  const onTouchMove = (e: React.TouchEvent) => {
+    if (!controllerActive) return;
+    e.preventDefault();
+    const now = Date.now();
+    if (now - lastMove.current < 40) return;
+    lastMove.current = now;
+    sendControlTouch(e, 'ms');
+  };
+
+  const onTouchEnd = (e: React.TouchEvent) => {
+    if (!controllerActive) return;
+    e.preventDefault();
+    onControlInput({ t: 'mu', btn: 'left' });
+  };
+
+  const sendControlTouch = (e: React.TouchEvent, t: string) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const tt = e.touches[0] ?? e.changedTouches[0];
+    const x = Math.min(1, Math.max(0, (tt.clientX - rect.left) / rect.width));
+    const y = Math.min(1, Math.max(0, (tt.clientY - rect.top) / rect.height));
+    onControlInput({ t, x, y, btn: 'left' });
+  };
+
   useEffect(() => {
     if (remoteVideoRef.current && remoteStream) {
       remoteVideoRef.current.srcObject = remoteStream;
@@ -378,6 +417,9 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
             onWheel={onWheelEvt}
             onKeyDown={onKeyDown}
             onKeyUp={onKeyUp}
+            onTouchStart={onTouchStart}
+            onTouchMove={onTouchMove}
+            onTouchEnd={onTouchEnd}
             onContextMenu={(e) => controllerActive && e.preventDefault()}
           >
             {isVideo ? (

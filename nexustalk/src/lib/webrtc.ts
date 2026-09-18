@@ -42,6 +42,7 @@ const SIGNAL_EVENTS = [
   'call:ice',
   'call:end',
   'call:sharing',
+  'call:control',
 ] as const;
 
 /**
@@ -121,7 +122,12 @@ class CallManager {
       return;
     }
 
-    this.socket.emit('call:invite', { to: peer.id, callType: type, fromName: undefined });
+    this.socket.emit('call:invite', {
+      to: peer.id,
+      callType: type,
+      fromName: peer.name,
+      fromUsername: peer.username,
+    });
 
     // No answer within 30s → give up
     this.ringTimeout = setTimeout(() => {
@@ -392,6 +398,8 @@ class CallManager {
   }
 
   private async attachMedia(type: CallType) {
+    // Degrade gracefully: a blocked permission on one device should not kill
+    // the call — continue media-less; the peer's audio/video still arrives.
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true },
@@ -400,9 +408,13 @@ class CallManager {
           : false,
       });
     } catch {
-      const err: any = new Error('permission_denied');
-      err.code = 'permission_denied';
-      throw err;
+      try {
+        this.localStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true },
+        });
+      } catch {
+        this.localStream = new MediaStream();
+      }
     }
     if (type === 'video') {
       this.cameraTrack = this.localStream.getVideoTracks()[0] ?? null;
@@ -456,8 +468,18 @@ class CallManager {
   }
 
   private attachLocalTracks() {
-    if (!this.pc || !this.localStream) return;
-    this.localStream.getTracks().forEach((track) => this.pc!.addTrack(track, this.localStream!));
+    if (!this.pc) return;
+    if (this.localStream) {
+      this.localStream.getTracks().forEach((track) => this.pc!.addTrack(track, this.localStream!));
+    }
+    // Media-less side (permission blocked): keep the audio/video m-lines in the
+    // SDP as recvonly so the peer's media can still flow to us.
+    if (!this.localStream?.getAudioTracks().length) {
+      this.pc.addTransceiver('audio', { direction: 'recvonly' });
+    }
+    if (this.callType === 'video' && !this.localStream?.getVideoTracks().length) {
+      this.pc.addTransceiver('video', { direction: 'recvonly' });
+    }
   }
 
   private async createOffer() {
