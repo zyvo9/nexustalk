@@ -41,6 +41,16 @@ const SCHEMA = `
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS files (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    mime        TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    data        BLOB NOT NULL,
+    uploader_id TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_members_user ON chat_members(user_id);
   CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
@@ -125,6 +135,14 @@ addColumn('google_id', 'google_id TEXT');
 addColumn('nex_id', 'nex_id TEXT');
 addColumn('username', 'username TEXT');
 addColumn('onboarded', "onboarded INTEGER DEFAULT 0");
+
+// messages.attachments: JSON array [{id, name, mime, size}]
+{
+  const msgColumns = (await db.prepare('PRAGMA table_info(messages)').all()).map((c) => c.name);
+  if (!msgColumns.includes('attachments')) {
+    await db.exec('ALTER TABLE messages ADD COLUMN attachments TEXT');
+  }
+}
 
 export default db;
 

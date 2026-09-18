@@ -21,11 +21,13 @@ import {
   Info,
   Palette,
   X,
-  ChevronLeft
+  ChevronLeft,
+  Loader2
 } from 'lucide-react';
 import { Chat, Message } from '../../types';
 import { chatWallpapers } from '../../data/mockData';
 import { Avatar } from '../common/Avatar';
+import { api, apiUrl } from '../../lib/api';
 
 interface ChatViewProps {
   chat: Chat;
@@ -35,7 +37,7 @@ interface ChatViewProps {
   onStartVideoCall: (contactName: string, avatar: string) => void;
   onStartRemoteSession: (deviceId?: string, deviceName?: string) => void;
   onOpenGroupInfo: () => void;
-  onSendMessage: (chatId: string, text: string, replyTo?: Message['replyTo']) => void;
+  onSendMessage: (chatId: string, text: string, replyTo?: Message['replyTo'], attachments?: Array<{ id: string; name: string; mime: string; size: number }>) => void;
   onTyping?: (chatId: string, isTyping: boolean) => void;
 }
 
@@ -59,6 +61,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const [audioProgress, setAudioProgress] = useState(35); // percentage for demo
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [uploadingCount, setUploadingCount] = useState(0);
+  const [pendingAtts, setPendingAtts] = useState<Array<{ id: string; name: string; mime: string; size: number }>>([]);
+  const [attachError, setAttachError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const pendingAttsRef = useRef(pendingAtts);
+  pendingAttsRef.current = pendingAtts;
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -68,7 +77,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
   const handleSend = (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!inputText.trim()) return;
+    if (!inputText.trim() && !pendingAttsRef.current.length) return;
 
     onSendMessage(
       chat.id,
@@ -79,9 +88,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
             senderName: replyingTo.senderName,
             text: replyingTo.text,
           }
-        : undefined
+        : undefined,
+      pendingAttsRef.current.length ? [...pendingAttsRef.current] : undefined
     );
 
+    pendingAttsRef.current = [];
+    setPendingAtts([]);
     setInputText('');
     setReplyingTo(null);
     setShowEmojiMenu(false);
@@ -93,6 +105,33 @@ export const ChatView: React.FC<ChatViewProps> = ({
     chatWallpapers.find((w) => w.id === activeWallpaper) || chatWallpapers[0];
 
   const emojis = ['👍', '❤️', '🔥', '😂', '🎉', '👏', '⚡', '🚀'];
+
+  const handleFilesPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []).slice(0, 4);
+    e.target.value = '';
+    if (!files.length) return;
+    setAttachError('');
+    setUploadingCount((c) => c + files.length);
+    for (const file of files) {
+      try {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(r.result as string);
+          r.onerror = () => reject(new Error('Could not read file'));
+          r.readAsDataURL(file);
+        });
+        const res = await api<{ file: { id: string; name: string; mime: string; size: number } }>(
+          '/api/upload',
+          { method: 'POST', body: JSON.stringify({ name: file.name, dataUrl }) }
+        );
+        setPendingAtts((prev) => [...prev, res.file].slice(0, 4));
+      } catch (err: any) {
+        setAttachError(err.message ?? 'Upload failed');
+      } finally {
+        setUploadingCount((c) => c - 1);
+      }
+    }
+  };
 
   const toggleAudio = (msgId: string) => {
     if (playingAudioId === msgId) {
@@ -493,6 +532,31 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
       {/* Input Bar */}
       <div className="px-3 sm:px-4 pt-3 pb-safe bg-slate-950/85 border-t border-white/5 backdrop-blur-2xl shrink-0 relative z-20">
+        {/* Pending attachments + upload status */}
+        {(pendingAtts.length > 0 || uploadingCount > 0 || attachError) && (
+          <div className="px-1 pb-2 flex flex-wrap items-center gap-1.5">
+            {pendingAtts.map((a, i) => (
+              <span key={a.id} className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white/[0.06] border border-white/10 text-[11px] text-slate-300">
+                <FileText className="w-3 h-3 text-indigo-300 shrink-0" />
+                <span className="max-w-[140px] truncate">{a.name}</span>
+                <button
+                  type="button"
+                  onClick={() => setPendingAtts((prev) => prev.filter((_, j) => j !== i))}
+                  className="text-slate-500 hover:text-white cursor-pointer"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+            {uploadingCount > 0 && (
+              <span className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-slate-400">
+                <Loader2 className="w-3 h-3 animate-spin" /> Uploading…
+              </span>
+            )}
+            {attachError && <span className="text-[11px] text-rose-400">{attachError}</span>}
+          </div>
+        )}
+
         <form
           onSubmit={handleSend}
           className="flex items-center gap-1.5 p-1.5 rounded-3xl bg-white/[0.05] border border-white/[0.06] focus-within:ring-2 focus-within:ring-indigo-500/40 transition-all"
@@ -520,24 +584,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     {
                       icon: <ImageIcon className="w-4 h-4 text-sky-300" />,
                       label: 'Photos & videos',
-                      text: 'Sharing a photo…',
+                      accept: 'image/*,video/*',
                     },
                     {
                       icon: <FileText className="w-4 h-4 text-indigo-300" />,
                       label: 'Document',
-                      text: 'Sending deployment_log.txt (420 KB)…',
-                    },
-                    {
-                      icon: <MonitorSmartphone className="w-4 h-4 text-emerald-300" />,
-                      label: 'Remote session invite',
-                      text: 'Connect with me on NexusTalk — ID: 849 203 118',
+                      accept: '',
                     },
                   ].map((item) => (
                     <button
                       key={item.label}
                       type="button"
                       onClick={() => {
-                        onSendMessage(chat.id, item.text, undefined);
+                        if (fileInputRef.current) {
+                          fileInputRef.current.accept = item.accept;
+                          fileInputRef.current.click();
+                        }
                         setShowAttachmentMenu(false);
                       }}
                       className="w-full px-3 py-2 rounded-xl text-xs text-slate-200 hover:bg-white/5 flex items-center gap-2.5 cursor-pointer"
@@ -546,10 +608,24 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       <span>{item.label}</span>
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onStartRemoteSession();
+                      setShowAttachmentMenu(false);
+                    }}
+                    className="w-full px-3 py-2 rounded-xl text-xs text-slate-200 hover:bg-white/5 flex items-center gap-2.5 border-t border-white/5 cursor-pointer"
+                  >
+                    <MonitorSmartphone className="w-4 h-4 text-emerald-300" />
+                    <span>Remote session invite</span>
+                  </button>
                 </motion.div>
               )}
             </AnimatePresence>
           </div>
+
+          {/* Hidden file input */}
+          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFilesPicked} />
 
           {/* Emoji */}
           <div className="relative">
@@ -601,14 +677,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
           />
 
           {/* Send / Voice */}
-          {inputText.trim() ? (
+          {inputText.trim() || pendingAttsRef.current.length ? (
             <motion.button
               whileTap={{ scale: 0.9 }}
               type="submit"
-              className="w-10 h-10 rounded-full accent-gradient on-accent flex items-center justify-center shadow-lg shadow-indigo-600/30 hover:brightness-110 cursor-pointer"
+              disabled={uploadingCount > 0}
+              className="w-10 h-10 rounded-full accent-gradient on-accent flex items-center justify-center shadow-lg shadow-indigo-600/30 hover:brightness-110 cursor-pointer disabled:opacity-60"
               title="Send"
             >
-              <Send className="w-[18px] h-[18px]" strokeWidth={2} />
+              {uploadingCount > 0 ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-[18px] h-[18px]" strokeWidth={2} />}
             </motion.button>
           ) : (
             <motion.button

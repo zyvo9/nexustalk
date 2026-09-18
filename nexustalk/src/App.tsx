@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { WifiOff, RefreshCw } from 'lucide-react';
 import { TabType, Chat } from './types';
 import { sampleCalls, sampleStories } from './data/mockData';
-import { api, getToken, setToken, clearToken } from './lib/api';
+import { api, apiUrl, getToken, setToken, clearToken } from './lib/api';
 import { getSocket, resetSocket } from './lib/realtime';
 
 // Layout & Common Components
@@ -42,6 +42,7 @@ interface RealChat {
 }
 interface RealMessage {
   id: string; body: string; at: string; senderId: string; senderName: string;
+  attachments?: Array<{ id: string; name: string; mime: string; size: number }>;
 }
 
 /** SQLite "YYYY-MM-DD HH:MM:SS" (UTC) or ISO → local HH:MM */
@@ -211,10 +212,10 @@ export default function App() {
   }, [isLoggedIn, selectedChatId]);
 
   // ---- Real chat helpers ----
-  const handleRealSend = useCallback(async (chatId: string, text: string) => {
+  const handleRealSend = useCallback(async (chatId: string, text: string, _replyTo?: unknown, attachments?: Array<{ id: string; name: string; mime: string; size: number }>) => {
     await api(`/api/chats/${chatId}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ body: text }),
+      body: JSON.stringify({ body: text, attachments }),
     });
     // The message comes back through the socket broadcast — no local append here.
   }, []);
@@ -352,6 +353,13 @@ export default function App() {
       dateGroup: 'Today',
       status: 'read' as const,
       isIncoming: m.senderId !== me?.id,
+      attachments: (m.attachments ?? []).map((a) => ({
+        id: a.id,
+        type: (a.mime?.startsWith('image/') ? 'image' : a.mime?.startsWith('video/') ? 'video' : 'file') as 'image' | 'video' | 'file',
+        url: apiUrl(`/api/files/${a.id}`),
+        name: a.name,
+        size: a.size ? `${Math.round(a.size / 1024)} KB` : undefined,
+      })),
     })),
   }));
 
