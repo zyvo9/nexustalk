@@ -215,6 +215,10 @@ def handle_input(msg: dict):
                 keyboard.release(k)
         elif t == "type":
             keyboard.type(msg.get("text", ""))
+        elif t == "clip":
+            import pyperclip
+            pyperclip.copy(str(msg.get("text", "")))
+            print("clipboard set on host PC")
     except Exception as e:
         print("input error:", e)
 

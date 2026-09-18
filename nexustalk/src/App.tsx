@@ -645,6 +645,7 @@ export default function App() {
             setTimeout(() => setCallToast(null), 2000);
           }}
           onControlInput={(obj) => getCallManager().sendControlInput(obj)}
+          getStats={() => getCallManager().getStatsOnce()}
         />
       )}
 

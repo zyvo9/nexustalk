@@ -72,6 +72,7 @@ class CallManager {
   private agentWs: WebSocket | null = null;
   private controlEnabled = false;
   private grantedPeers: string[] = [];
+  private lastStats: { bytes: number; ts: number } | null = null;
 
   get isControlEnabled() {
     return this.controlEnabled;
@@ -379,6 +380,36 @@ class CallManager {
       this.controlChannel?.send(JSON.stringify(obj));
     } catch {
       /* channel not open */
+    }
+  }
+
+  /** Live session stats (RustDesk-style HUD): fps, latency, bitrate. */
+  async getStatsOnce(): Promise<{ fps: number; rtt: number; kbps: number } | null> {
+    if (!this.pc) return null;
+    try {
+      const report = await this.pc.getStats();
+      let fps = 0;
+      let rtt = 0;
+      let bytes = 0;
+      const ts = Date.now();
+      report.forEach((s: any) => {
+        if (s.type === 'inbound-rtp' && s.kind === 'video') {
+          fps = Math.round(s.framesPerSecond ?? 0);
+          bytes = s.bytesReceived ?? 0;
+        }
+        if (s.type === 'candidate-pair' && s.state === 'succeeded' && s.currentRoundTripTime != null) {
+          rtt = Math.round(s.currentRoundTripTime * 1000);
+        }
+      });
+      let kbps = 0;
+      if (this.lastStats) {
+        const dt = (ts - this.lastStats.ts) / 1000;
+        if (dt > 0) kbps = Math.round(((bytes - this.lastStats.bytes) * 8) / dt / 1000);
+      }
+      this.lastStats = { bytes, ts };
+      return { fps, rtt, kbps };
+    } catch {
+      return null;
     }
   }
 
