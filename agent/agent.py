@@ -84,7 +84,7 @@ class ScreenCapture:
                 print("dxcam failed, using mss:", e)
                 self._camera = None
         if self._camera is None:
-            self._sct = mss.mss()
+            self._sct = mss.MSS()
             self._monitor = self._sct.monitors[1]
             print(f"capture: mss fallback @ {TARGET_FPS}fps")
 
@@ -263,12 +263,24 @@ async def start_session(controller_socket_id: str, from_name: str = ""):
 
     channel = pc.createDataChannel("control", ordered=True)
 
-    @channel.on("message")
-    def on_message(message):
+    def handle_dc_message(message):
         try:
             handle_input(json.loads(message))
         except Exception as e:
             print("bad input:", e)
+
+    @channel.on("message")
+    def on_message(message):
+        handle_dc_message(message)
+
+    # The controller also creates its own channel — bind it too, or input is lost
+    @pc.on("datachannel")
+    def on_datachannel(ch):
+        print("controller data channel:", ch.label)
+
+        @ch.on("message")
+        def on_msg2(message):
+            handle_dc_message(message)
 
     @pc.on("connectionstatechange")
     async def on_state():
