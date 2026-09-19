@@ -5,6 +5,18 @@ allprojects {
     }
 }
 
+// Some plugins still ship with older compileSdk — force every Android
+// subproject up to 36 so AAR metadata checks pass.
+subprojects {
+    afterEvaluate {
+        if (project.plugins.hasPlugin("com.android.library")) {
+            project.extensions.configure<com.android.build.gradle.LibraryExtension>("android") {
+                if (compileSdk < 36) compileSdk = 36
+            }
+        }
+    }
+}
+
 val newBuildDir: Directory =
     rootProject.layout.buildDirectory
         .dir("../../build")
