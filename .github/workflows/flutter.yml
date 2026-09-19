@@ -52,10 +52,9 @@ jobs:
         working-directory: flutter_app
         run: flutter build windows --release
       - name: Bundle
-        working-directory: flutter_app/build/windows/x64/runner/Release
-        run: Compress-Archive -Path * -DestinationPath ../../../../NexusTalk-Windows.zip
+        run: Compress-Archive -Path flutter_app/build/windows/x64/runner/Release/* -DestinationPath NexusTalk-Windows.zip -Force
       - name: Upload Windows bundle
         uses: actions/upload-artifact@v4
         with:
           name: NexusTalk-Windows
-          path: flutter_app/NexusTalk-Windows.zip
+          path: NexusTalk-Windows.zip
