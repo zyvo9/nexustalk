@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/network.dart';
 import '../../core/socket.dart';
+import '../calls/call_manager.dart';
 import '../../core/theme.dart';
 import '../../widgets/avatar.dart';
 
@@ -88,6 +89,37 @@ class _ChatViewState extends State<ChatView> {
       appBar: AppBar(
         backgroundColor: NTColors.bgCard,
         titleSpacing: 0,
+        actions: [
+          // Voice call
+          IconButton(
+            icon: const Icon(Icons.phone_outlined, size: 21),
+            tooltip: 'Voice call',
+            onPressed: () => CallManager.I.start(
+              CallPeer(
+                id: (asMap(widget.chat['other'])['id'] ?? '') as String,
+                name: (widget.chat['title'] ?? '?') as String,
+                username: asMap(widget.chat['other'])['username'] as String?,
+                avatar: asMap(widget.chat['other'])['avatar'] as String?,
+              ),
+              CallType.audio,
+            ),
+          ),
+          // Video call
+          IconButton(
+            icon: const Icon(Icons.videocam_outlined, size: 22),
+            tooltip: 'Video call',
+            onPressed: () => CallManager.I.start(
+              CallPeer(
+                id: (asMap(widget.chat['other'])['id'] ?? '') as String,
+                name: (widget.chat['title'] ?? '?') as String,
+                username: asMap(widget.chat['other'])['username'] as String?,
+                avatar: asMap(widget.chat['other'])['avatar'] as String?,
+              ),
+              CallType.video,
+            ),
+          ),
+          const SizedBox(width: 4),
+        ],
         title: Row(
           children: [
             NAvatar(
